@@ -1,0 +1,825 @@
+{% extends "base.html" %}
+{% block title %}管理后台 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap" x-data="adminPage()" x-cloak>
+  <template x-if="!isAdmin">
+    <div class="card card-pad" style="max-width:520px;margin:60px auto">
+      <div style="font-weight:700;font-size:17px;margin-bottom:8px">需要管理员账号</div>
+      <p class="small muted">
+        管理后台不开放自助注册。请用已初始化的管理员账号登录
+        （账号来自环境变量 <code class="mono">ADMIN_INIT_USER</code>）。
+      </p>
+      <a href="/login?next=/admin" class="btn btn-primary" style="margin-top:12px">去登录</a>
+    </div>
+  </template>
+
+  <template x-if="isAdmin">
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <h1 class="page-title" style="font-size:24px;margin:0">管理后台</h1>
+        <span class="badge badge-gray" x-text="me ? me.username : ''"></span>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" @click="loadAll()">刷新</button>
+      </div>
+
+      <div class="admin-shell">
+        <nav class="admin-nav">
+          <template x-for="t in tabs" :key="t.k">
+            <button :class="tab === t.k ? 'on' : ''" @click="tab = t.k" x-text="t.label"></button>
+          </template>
+        </nav>
+
+        <div>
+          <!-- 看板 -->
+          <template x-if="tab === 'dash'">
+            <div>
+              <div class="kpi-grid">
+                <div class="kpi"><div class="kv" x-text="dash.new_users ?? '—'"></div><div class="kl">今日新增用户</div></div>
+                <div class="kpi"><div class="kv" x-text="dash.new_tasks ?? '—'"></div><div class="kl">今日任务</div></div>
+                <div class="kpi"><div class="kv" x-text="(dash.new_chars ?? 0).toLocaleString()"></div><div class="kl">今日识别字数</div></div>
+                <div class="kpi"><div class="kv" x-text="dash.recharge_text ?? '—'"></div><div class="kl">今日充值</div></div>
+                <div class="kpi"><div class="kv" x-text="dash.consume_text ?? '—'"></div><div class="kl">今日消费</div></div>
+                <div class="kpi"><div class="kv" :style="dash.pending_orders > 0 ? 'color:var(--seal)' : ''"
+                     x-text="dash.pending_orders ?? '—'"></div><div class="kl">待处理充值单</div></div>
+                <div class="kpi">
+                  <div class="kv" :style="dash.order_check_avg !== null && dash.order_check_avg < 0.98 ? 'color:var(--amber)' : ''"
+                       x-text="dash.order_check_avg !== null ? (dash.order_check_avg * 100).toFixed(1) + '%' : '—'"></div>
+                  <div class="kl">行序自检均值（M-10 ≥98%）</div>
+                </div>
+                <div class="kpi"><div class="kv" x-text="dash.split_pages ?? 0"></div><div class="kl">双页拆分命中</div></div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">资损监控（台账累加 vs 用户余额）</div>
+                <div class="card-pad">
+                  <template x-if="dash.ledger_integrity && dash.ledger_integrity.ok">
+                    <div class="alert alert-ok"><span>✓</span>
+                      <div>账实相符：已核对 <span x-text="dash.ledger_integrity.checked"></span> 个用户，无不平。</div>
+                    </div>
+                  </template>
+                  <template x-if="dash.ledger_integrity && !dash.ledger_integrity.ok">
+                    <div>
+                      <div class="alert alert-err"><span>!</span>
+                        <div>发现 <span x-text="dash.ledger_integrity.mismatches.length"></span> 个用户账实不平，立即排查。</div>
+                      </div>
+                      <table class="tbl" style="margin-top:10px">
+                        <thead><tr><th>用户</th><th class="num">余额</th><th class="num">台账合计</th><th class="num">差额</th></tr></thead>
+                        <tbody>
+                          <template x-for="m in dash.ledger_integrity.mismatches" :key="m.user_id">
+                            <tr>
+                              <td x-text="m.username"></td>
+                              <td class="num" x-text="TXGJ.yuan(m.balance_mill)"></td>
+                              <td class="num" x-text="TXGJ.yuan(m.ledger_sum_mill)"></td>
+                              <td class="num" style="color:var(--seal)" x-text="TXGJ.yuan(m.diff_mill)"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">今日导出格式分布</div>
+                <div class="card-pad">
+                  <template x-if="!dash.export_dist || !dash.export_dist.length">
+                    <div class="small muted">今日暂无导出</div>
+                  </template>
+                  <div class="stat-row">
+                    <template x-for="e in (dash.export_dist || [])" :key="e.kind">
+                      <div class="stat">
+                        <div class="sv" x-text="e.count"></div>
+                        <div class="sl" x-text="e.kind"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 充值单 -->
+          <template x-if="tab === 'rcg'">
+            <div class="card">
+              <div class="card-hd">
+                充值申请
+                <div style="flex:1"></div>
+                <select x-model="rcgStatus" @change="loadRcg()" style="width:auto;padding:4px 8px;font-size:13px">
+                  <option value="submitted">待处理</option>
+                  <option value="all">全部</option>
+                  <option value="confirmed">已到账</option>
+                  <option value="rejected">已驳回</option>
+                </select>
+              </div>
+              <div class="card-pad" style="padding-top:6px">
+                <template x-if="rcg.length === 0">
+                  <div class="small muted" style="padding:14px 0">没有需要处理的申请</div>
+                </template>
+                <table class="tbl" x-show="rcg.length">
+                  <thead>
+                    <tr><th>单号</th><th>用户</th><th class="num">金额</th><th>方式</th>
+                        <th>付款人</th><th>状态</th><th>时间</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="o in rcg" :key="o.id">
+                      <tr>
+                        <td class="mono small" x-text="o.order_no"></td>
+                        <td x-text="o.username"></td>
+                        <td class="num" x-text="o.amount_text"></td>
+                        <td x-text="o.pay_method === 'wechat' ? '微信' : '支付宝'"></td>
+                        <td x-text="o.payer_note || '—'"></td>
+                        <td><span class="badge" :class="o.status === 'confirmed' ? 'badge-jade' :
+                            (o.status === 'rejected' ? 'badge-seal' : 'badge-amber')"
+                              x-text="o.status_label"></span></td>
+                        <td class="small muted" x-text="TXGJ.fmtTime(o.created_at)"></td>
+                        <td>
+                          <template x-if="o.status === 'submitted'">
+                            <div style="display:flex;gap:6px">
+                              <button class="btn btn-sm btn-seal" @click="confirmRcg(o)">确认到账</button>
+                              <button class="btn btn-sm" @click="rejectRcg(o)">驳回</button>
+                            </div>
+                          </template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- 用户 -->
+          <template x-if="tab === 'users'">
+            <div class="card">
+              <div class="card-hd">
+                用户
+                <div style="flex:1"></div>
+                <input type="text" x-model="userKw" placeholder="搜用户名/邮箱/ID"
+                       style="width:200px;padding:5px 9px;font-size:13px" @keydown.enter="loadUsers()">
+                <button class="btn btn-sm" @click="loadUsers()">搜索</button>
+              </div>
+              <div class="card-pad" style="padding-top:6px">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>用户名</th><th>邮箱</th><th class="num">余额</th><th class="num">消费</th>
+                        <th>免费额度</th><th>任务</th><th>状态 / 风险</th><th>注册 · 来源</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="u in users" :key="u.id">
+                      <tr>
+                        <td>
+                          <span x-text="u.username"></span>
+                          <span class="badge badge-gray" x-show="u.role === 'admin'">admin</span>
+                        </td>
+                        <td class="small" x-text="u.email || '—'"></td>
+                        <td class="num" x-text="u.balance_text"></td>
+                        <td class="num" x-text="u.consumed_text"></td>
+                        <td x-text="u.free_left"></td>
+                        <td x-text="u.task_count"></td>
+                        <td style="white-space:nowrap">
+                          <span class="badge badge-jade" x-show="u.status !== 'disabled'">正常</span>
+                          <span class="badge badge-seal" x-show="u.status === 'disabled'">已停用</span>
+                          <span class="badge badge-amber" x-show="u.risk_flag"
+                                title="注册时触发防刷判定">风控</span>
+                        </td>
+                        <td class="small muted">
+                          <div x-text="TXGJ.fmtTime(u.created_at)"></div>
+                          <div class="mono" style="font-size:11px;opacity:.75"
+                               :title="'注册 IP：' + (u.reg_ip || '未知') + '，设备指纹前 8 位：' + (u.device_prefix || '无')"
+                               x-text="(u.reg_ip || '—') + (u.device_prefix ? ' / ' + u.device_prefix : '')"></div>
+                        </td>
+                        <td>
+                          <div style="display:flex;gap:5px;white-space:nowrap">
+                            <button class="btn btn-sm" style="padding:3px 8px" @click="openAdjust(u)">调余额</button>
+                            <button class="btn btn-sm btn-ghost" style="padding:3px 8px" @click="grantFree(u)">补额度</button>
+                            <button class="btn btn-sm btn-ghost" style="padding:3px 8px" @click="toggleStatus(u)"
+                                    x-text="u.status === 'disabled' ? '启用' : '停用'"></button>
+                          </div>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 4px 2px">
+                  <span class="small muted" x-text="`共 ${userTotal} 个账号`"></span>
+                  <template x-if="userKw">
+                    <span class="small muted">（搜索结果）</span>
+                  </template>
+                  <div style="flex:1"></div>
+                  <button class="btn btn-sm" :disabled="userOffset <= 0" @click="userPrev()">上一页</button>
+                  <span class="small muted" x-text="`${userPage()} / ${userPages()}`"></span>
+                  <button class="btn btn-sm" :disabled="userOffset + userPageSize >= userTotal"
+                          @click="userNext()">下一页</button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 任务 -->
+          <template x-if="tab === 'tasks'">
+            <div class="card">
+              <div class="card-hd">
+                任务
+                <div style="flex:1"></div>
+                <select x-model="taskStatus" @change="loadTasks()" style="width:auto;padding:4px 8px;font-size:13px">
+                  <option value="">全部</option>
+                  <option value="processing">识别中</option>
+                  <option value="settled">已完成</option>
+                  <option value="partial">部分完成</option>
+                  <option value="locked">待补款</option>
+                  <option value="failed">失败</option>
+                  <option value="expired">已过期</option>
+                </select>
+              </div>
+              <div class="card-pad" style="padding-top:6px">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>任务</th><th>用户</th><th>文件</th><th>页</th><th>字数</th>
+                        <th class="num">扣费</th><th>状态</th><th>行序</th><th>时间</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="t in tasks" :key="t.id">
+                      <tr>
+                        <td class="mono small">
+                          <a :href="'/task/' + t.id" target="_blank" x-text="t.short_id"></a>
+                        </td>
+                        <td x-text="t.username"></td>
+                        <td class="small" x-text="t.filename"></td>
+                        <td x-text="t.pages"></td>
+                        <td x-text="t.chars"></td>
+                        <td class="num" x-text="t.amount_text"></td>
+                        <td><span class="badge" x-text="t.status_label"></span></td>
+                        <td class="small" x-text="t.order_check_pass_rate !== null ?
+                            (t.order_check_pass_rate * 100).toFixed(1) + '%' : '—'"></td>
+                        <td class="small muted" x-text="TXGJ.fmtTime(t.created_at)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- 对账 -->
+          <template x-if="tab === 'ledger'">
+            <div>
+              <div class="card">
+                <div class="card-hd">
+                  每日对账
+                  <div style="flex:1"></div>
+                  <input type="text" x-model="reconDate" placeholder="2026-10-27"
+                         style="width:140px;padding:5px 9px;font-size:13px">
+                  <button class="btn btn-sm" @click="loadRecon()">查询</button>
+                </div>
+                <div class="card-pad">
+                  <table class="tbl">
+                    <tbody>
+                      <tr><td>期初余额</td><td class="num" x-text="recon.text ? recon.text.begin : '—'"></td></tr>
+                      <tr><td>＋ 充值</td><td class="num" x-text="recon.text ? recon.text.recharge : '—'"></td></tr>
+                      <tr><td>－ 识别消费</td><td class="num" x-text="recon.text ? recon.text.consume : '—'"></td></tr>
+                      <tr><td>＋ 退款</td><td class="num" x-text="recon.text ? recon.text.refund : '—'"></td></tr>
+                      <tr><td>± 人工调整</td><td class="num" x-text="recon.text ? recon.text.adjust : '—'"></td></tr>
+                      <tr style="font-weight:700"><td>＝ 期末余额</td>
+                        <td class="num" x-text="recon.text ? recon.text.end : '—'"></td></tr>
+                      <tr>
+                        <td>校验</td>
+                        <td>
+                          <span class="badge" :class="recon.balanced ? 'badge-jade' : 'badge-seal'"
+                                x-text="recon.balanced ? '自洽' : '不平，需排查'"></span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">全站流水（最近 100 条）</div>
+                <div class="card-pad" style="padding-top:6px">
+                  <table class="tbl">
+                    <thead>
+                      <tr><th>时间</th><th>用户</th><th>类型</th><th class="num">金额</th>
+                          <th class="num">余额后</th><th>说明</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="l in ledgerRows" :key="l.id">
+                        <tr>
+                          <td class="small muted" x-text="TXGJ.fmtTime(l.created_at)"></td>
+                          <td x-text="l.username"></td>
+                          <td x-text="l.type"></td>
+                          <td class="num" x-text="TXGJ.yuan(l.amount_mill)"></td>
+                          <td class="num" x-text="TXGJ.yuan(l.balance_after)"></td>
+                          <td class="small" x-text="l.remark || ''"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 质量 -->
+          <template x-if="tab === 'quality'">
+            <div>
+              <div class="kpi-grid">
+                <div class="kpi">
+                  <div class="kv" x-text="q.M_10_order.rate !== null ? (q.M_10_order.rate*100).toFixed(1)+'%' : '—'"></div>
+                  <div class="kl">行序正确率（M-10 ≥98%，样本 <span x-text="q.M_10_order.n"></span>）</div>
+                </div>
+                <div class="kpi">
+                  <div class="kv" x-text="q.M_11_split.rate !== null ? (q.M_11_split.rate*100).toFixed(1)+'%' : '—'"></div>
+                  <div class="kl">拆分准确率（M-11 ≥95%，样本 <span x-text="q.M_11_split.n"></span>）</div>
+                </div>
+                <div class="kpi">
+                  <div class="kv" x-text="q.M_12_bbox.rate !== null ? (q.M_12_bbox.rate*100).toFixed(1)+'%' : '—'"></div>
+                  <div class="kl">框定位准确率（M-12 ≥99%，样本 <span x-text="q.M_12_bbox.n"></span>）</div>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">抽检录入<span class="hint">填任务短号与页号，勾选判断</span></div>
+                <div class="card-pad">
+                  <div style="display:grid;grid-template-columns:1fr 100px;gap:10px">
+                    <label class="fld"><span class="lbl">任务短号（前 8 位）</span>
+                      <input type="text" x-model="qsTaskId" placeholder="如 a1b2c3d4"></label>
+                    <label class="fld"><span class="lbl">页号</span>
+                      <input type="number" x-model.number="qsPage" value="1"></label>
+                  </div>
+                  <div class="checkline" style="gap:18px;margin-bottom:12px">
+                    <label><input type="checkbox" x-model="qsOrder"> 行序正确</label>
+                    <label><input type="checkbox" x-model="qsSplit"> 拆分正确</label>
+                    <label><input type="checkbox" x-model="qsBbox"> 框定位正确</label>
+                  </div>
+                  <button class="btn btn-primary btn-sm" @click="submitSample()">提交抽检</button>
+                  <div class="small muted" style="margin-top:10px">
+                    说明：抽检数据是 M-10/M-11/M-12 的唯一持续数据源。不做抽检，三条红线就只是上线那天的数字。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 导出健康度 -->
+          <template x-if="tab === 'export'">
+            <div class="card">
+              <div class="card-hd">导出健康度</div>
+              <div class="card-pad" style="padding-top:6px">
+                <table class="tbl">
+                  <thead><tr><th>格式</th><th>总数</th><th>成功</th><th>成功率</th>
+                      <th class="num">平均耗时</th><th class="num">平均体积</th></tr></thead>
+                  <tbody>
+                    <template x-for="r in exportHealth.by_kind || []" :key="r.kind">
+                      <tr>
+                        <td x-text="r.kind"></td>
+                        <td x-text="r.total"></td>
+                        <td x-text="r.success"></td>
+                        <td>
+                          <span class="badge" :class="r.below_target ? 'badge-seal' : 'badge-jade'"
+                                x-text="r.success_rate !== null ? (r.success_rate*100).toFixed(1)+'%' : '—'"></span>
+                        </td>
+                        <td class="num" x-text="r.avg_ms + ' ms'"></td>
+                        <td class="num" x-text="TXGJ.fmtBytes(r.avg_size)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <div class="divider"></div>
+                <div class="small" style="font-weight:600;margin-bottom:6px">失败原因分布</div>
+                <template x-if="!(exportHealth.failures || []).length">
+                  <div class="small muted">暂无失败记录</div>
+                </template>
+                <table class="tbl" x-show="(exportHealth.failures || []).length">
+                  <tbody>
+                    <template x-for="(f,i) in exportHealth.failures" :key="i">
+                      <tr><td x-text="f.kind"></td><td class="mono small" x-text="f.error_code"></td>
+                          <td class="num" x-text="f.n"></td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- 设置 -->
+          <template x-if="tab === 'settings'">
+            <div>
+              <div class="card">
+                <div class="card-hd">OCR 识别服务（星河 PaddleOCR-VL）</div>
+                <div class="card-pad">
+                  <div class="small muted" style="margin-bottom:12px">
+                    这里配置的 Token / 接口地址会优先于 .env 环境变量，保存后立即生效（下次识别自动使用）。
+                    留空则回退到 .env 里的 AISTUDIO_TOKEN。
+                  </div>
+                  <label class="fld">
+                    <span class="lbl">API Token</span>
+                    <input type="password" x-model="ocrToken" placeholder="留空则用 .env 的 AISTUDIO_TOKEN"
+                           autocomplete="off">
+                  </label>
+                  <label class="fld">
+                    <span class="lbl">接口地址（留空用默认）</span>
+                    <input type="text" x-model="ocrEndpoint"
+                           placeholder="https://paddleocr.aistudio-app.com/api/v2/ocr/jobs">
+                  </label>
+                  <label class="fld" style="max-width:320px">
+                    <span class="lbl">模型（留空用默认）</span>
+                    <input type="text" x-model="ocrModel" placeholder="PaddleOCR-VL-1.6">
+                  </label>
+                  <div style="margin-top:12px;display:flex;align-items:center;gap:12px">
+                    <button class="btn btn-sm btn-primary" @click="saveOcr()"
+                            :disabled="ocrBusy" x-text="ocrBusy ? '保存中…' : '保存 OCR 配置'"></button>
+                    <span class="small muted" x-text="ocrMsg"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">定位框开关与灰度</div>
+                <div class="card-pad">
+                  <label class="checkline" style="margin-bottom:12px">
+                    <input type="checkbox" x-model="bboxEnabled" @change="saveBbox()">
+                    <span>全站启用定位框层（应急关闭后 30 秒内生效，无需发版）</span>
+                  </label>
+                  <label class="fld" style="max-width:260px">
+                    <span class="lbl">灰度比例（0~1，仅对未结算任务生效）</span>
+                    <input type="number" step="0.1" min="0" max="1" x-model="bboxRatio"
+                           @change="saveBbox()">
+                  </label>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">收款码</div>
+                <div class="card-pad">
+                  <div class="small muted" style="margin-bottom:10px">
+                    充值页直接展示这两张图。没上传时用户看到「收款码待上传」，收不到钱。
+                    建议微信/支付宝各一张，PNG，≤2MB。
+                  </div>
+                  <div style="display:flex;gap:24px;flex-wrap:wrap">
+                    <template x-for="m in [{k:'wechat',t:'微信'},{k:'alipay',t:'支付宝'}]" :key="m.k">
+                      <div style="width:200px">
+                        <div class="lbl" x-text="m.t + '收款码'"></div>
+                        <img :src="'/pay/qr/' + m.k + '?v=' + qrVer" alt=""
+                             style="width:200px;height:200px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff"
+                             onerror="this.style.opacity=.25">
+                        <input type="file" accept="image/*" style="width:100%;margin-top:8px"
+                               @change="uploadQr(m.k, $event)">
+                        <div class="small muted" x-text="qrMsg[m.k] || ''"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">运维操作</div>
+                <div class="card-pad">
+                  <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <button class="btn btn-sm" @click="runCleanup()">立即执行 72h 清理</button>
+                    <button class="btn btn-sm" @click="expireBalance()">执行余额过期清零</button>
+                  </div>
+                  <div class="small muted" style="margin-top:10px" x-text="opMsg"></div>
+                </div>
+              </div>
+
+              <div class="card" style="margin-top:14px">
+                <div class="card-hd">全部配置项</div>
+                <div class="card-pad" style="padding-top:6px">
+                  <table class="tbl">
+                    <thead><tr><th>键</th><th>值</th><th>更新时间</th></tr></thead>
+                    <tbody>
+                      <template x-for="s in settings" :key="s.key">
+                        <tr><td class="mono small" x-text="s.key"></td>
+                            <td class="small" x-text="s.value"></td>
+                            <td class="small muted" x-text="TXGJ.fmtTime(s.updated_at)"></td></tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 日志 -->
+          <template x-if="tab === 'logs'">
+            <div class="card">
+              <div class="card-hd">
+                操作日志
+                <div style="flex:1"></div>
+                <button class="btn btn-sm" @click="logKind='admin';loadLogs()"
+                        :class="logKind==='admin'?'btn-primary':''">资金/开关</button>
+                <button class="btn btn-sm" @click="logKind='access';loadLogs()"
+                        :class="logKind==='access'?'btn-primary':''">访问</button>
+              </div>
+              <div class="card-pad" style="padding-top:6px">
+                <table class="tbl">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th x-text="logKind==='admin' ? '操作人' : '用户'"></th>
+                      <th>动作</th><th>对象</th><th>前后值/详情</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(l,i) in logs" :key="i">
+                      <tr>
+                        <td class="small muted" x-text="TXGJ.fmtTime(l.created_at)"></td>
+                        <td class="small mono" x-text="(l.admin_id || l.user_id || '').slice(0,8)"></td>
+                        <td class="small" x-text="l.action"></td>
+                        <td class="small mono" x-text="(l.target_id || l.target_type || '')"></td>
+                        <td class="small muted" style="max-width:320px;overflow:hidden;text-overflow:ellipsis"
+                            x-text="l.before_value ? (l.before_value + ' → ' + l.after_value) : (l.detail || '')"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- 调余额弹窗 -->
+  <template x-if="adjustTarget">
+    <div class="modal-mask" @click.self="adjustTarget = null">
+      <div class="modal">
+        <div class="modal-hd">
+          调整余额：<span x-text="adjustTarget.username"></span>
+          <button class="x-btn" @click="adjustTarget = null">×</button>
+        </div>
+        <div class="modal-bd">
+          <div class="small muted" style="margin-bottom:12px">
+            当前余额 ¥<span x-text="TXGJ.yuan(adjustTarget.balance_mill)"></span>
+          </div>
+          <label class="fld">
+            <span class="lbl">调整金额（元，正数增加、负数扣减）</span>
+            <input type="number" step="0.01" x-model="adjustYuan" placeholder="30 或 -10">
+          </label>
+          <label class="fld">
+            <span class="lbl">原因（必填）</span>
+            <input type="text" x-model="adjustReason" placeholder="如：微信转账补录">
+          </label>
+          <label class="fld">
+            <span class="lbl">凭证号（必填）</span>
+            <input type="text" x-model="adjustVoucher" placeholder="充值单号或转账流水号">
+          </label>
+          <div class="small muted">
+            所有调整都会记入台账与操作日志，可追溯操作人与前后值。
+          </div>
+        </div>
+        <div class="modal-ft">
+          <button class="btn btn-primary" @click="submitAdjust()" :disabled="adjustBusy">确认调整</button>
+          <button class="btn" @click="adjustTarget = null">取消</button>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+
+<style>[x-cloak]{display:none!important}</style>
+
+<script>
+function adminPage() {
+  return {
+    isAdmin: false,
+    me: null,
+    tab: 'dash',
+    tabs: [
+      { k: 'dash', label: '看板' },
+      { k: 'rcg', label: '充值申请' },
+      { k: 'users', label: '用户' },
+      { k: 'tasks', label: '任务' },
+      { k: 'ledger', label: '对账' },
+      { k: 'quality', label: '质量抽检' },
+      { k: 'export', label: '导出健康' },
+      { k: 'settings', label: '开关与运维' },
+      { k: 'logs', label: '日志' },
+    ],
+    dash: {}, rcg: [], rcgStatus: 'submitted',
+    users: [], userKw: '', userOffset: 0, userTotal: 0, userPageSize: 50,
+    tasks: [], taskStatus: '',
+    recon: {}, reconDate: '', ledgerRows: [],
+    q: { M_10_order: {}, M_11_split: {}, M_12_bbox: {} },
+    qsTaskId: '', qsPage: 1, qsOrder: true, qsSplit: false, qsBbox: true,
+    exportHealth: {}, settings: [],
+    bboxEnabled: true, bboxRatio: 1, opMsg: '',
+    ocrToken: '', ocrEndpoint: '', ocrModel: '', ocrMsg: '', ocrBusy: false,
+    qrVer: Date.now(), qrMsg: {},
+    logs: [], logKind: 'admin',
+    adjustTarget: null, adjustYuan: 0, adjustReason: '', adjustVoucher: '', adjustBusy: false,
+
+    async init() {
+      try { this.me = await TXGJ.api('/api/auth/me'); } catch (_) {}
+      this.isAdmin = !!(this.me && this.me.role === 'admin');
+      if (!this.isAdmin) return;
+      this.loadAll();
+    },
+
+    loadAll() {
+      this.loadDash(); this.loadRcg(); this.loadUsers(); this.loadTasks();
+      this.loadRecon(); this.loadQuality(); this.loadExportHealth();
+      this.loadSettings(); this.loadLogs();
+    },
+
+    async loadDash() { try { this.dash = await TXGJ.api('/admin/api/dashboard'); } catch (e) { TXGJ.errToast(e); } },
+    async loadRcg() { try { const d = await TXGJ.api('/admin/api/recharge?status=' + this.rcgStatus); this.rcg = d.items || []; } catch (e) { TXGJ.errToast(e); } },
+    async loadUsers(offset = 0) {
+      try {
+        const d = await TXGJ.api(
+          `/admin/api/users?kw=${encodeURIComponent(this.userKw)}`
+          + `&limit=${this.userPageSize}&offset=${offset}`
+        );
+        this.users = d.items || [];
+        this.userTotal = d.total ?? this.users.length;
+        this.userOffset = offset;
+      } catch (e) { TXGJ.errToast(e); }
+    },
+    userPage() { return Math.floor(this.userOffset / this.userPageSize) + 1; },
+    userPages() { return Math.max(1, Math.ceil(this.userTotal / this.userPageSize)); },
+    userPrev() { if (this.userOffset > 0) this.loadUsers(Math.max(0, this.userOffset - this.userPageSize)); },
+    userNext() {
+      if (this.userOffset + this.userPageSize < this.userTotal) this.loadUsers(this.userOffset + this.userPageSize);
+    },
+    async loadTasks() {
+      try {
+        const d = await TXGJ.api('/admin/api/tasks?status=' + this.taskStatus);
+        this.tasks = d.items || [];
+      } catch (e) { TXGJ.errToast(e); }
+    },
+    async loadRecon() {
+      try {
+        this.recon = await TXGJ.api('/admin/api/ledger/daily' + (this.reconDate ? '?date=' + this.reconDate : ''));
+        const d = await TXGJ.api('/admin/api/ledger?limit=100');
+        this.ledgerRows = d.items || [];
+      } catch (e) { TXGJ.errToast(e); }
+    },
+    async loadQuality() { try { this.q = await TXGJ.api('/admin/api/quality/stats'); } catch (e) { TXGJ.errToast(e); } },
+    async loadExportHealth() { try { this.exportHealth = await TXGJ.api('/admin/api/exports/health'); } catch (e) { TXGJ.errToast(e); } },
+    async loadSettings() {
+      try {
+        this.settings = await TXGJ.api('/admin/api/settings');
+        const g = this.settings.find((s) => s.key === 'bbox_global_enabled');
+        const r = this.settings.find((s) => s.key === 'bbox_gray_ratio');
+        this.bboxEnabled = g ? g.value === '1' : true;
+        this.bboxRatio = r ? parseFloat(r.value) : 1;
+        const t = this.settings.find((s) => s.key === 'aistudio_token');
+        const e = this.settings.find((s) => s.key === 'aistudio_endpoint');
+        const m = this.settings.find((s) => s.key === 'aistudio_model');
+        this.ocrToken = t ? t.value : '';
+        this.ocrEndpoint = e ? e.value : '';
+        this.ocrModel = m ? m.value : '';
+      } catch (e) { TXGJ.errToast(e); }
+    },
+    async saveOcr() {
+      if (this.ocrBusy) return;
+      this.ocrBusy = true; this.ocrMsg = '';
+      try {
+        await TXGJ.api('/admin/api/settings/ocr', {
+          method: 'POST',
+          body: { token: this.ocrToken.trim(), endpoint: this.ocrEndpoint.trim(), model: this.ocrModel.trim() },
+        });
+        TXGJ.toast('OCR 配置已保存', 'ok');
+        this.loadSettings();
+      } catch (e) { TXGJ.errToast(e); }
+      finally { this.ocrBusy = false; }
+    },
+    async loadLogs() {
+      try { this.logs = await TXGJ.api('/admin/api/logs?kind=' + this.logKind + '&limit=100'); }
+      catch (e) { TXGJ.errToast(e); }
+    },
+
+    async confirmRcg(o) {
+      if (!confirm(`确认 ¥${o.amount_text.replace('¥','')} 已到账？\n用户：${o.username}\n付款人：${o.payer_note || '未填'}`)) return;
+      try {
+        const r = await TXGJ.api(`/admin/api/recharge/${o.id}/confirm`, { method: 'POST' });
+        TXGJ.toast(`已到账，余额 ¥${TXGJ.yuan(r.balance_after)}${r.unlocked_tasks ? '，解锁 ' + r.unlocked_tasks + ' 个任务' : ''}`, 'ok');
+        this.loadRcg(); this.loadDash();
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async rejectRcg(o) {
+      const reason = prompt('驳回原因（必填，会显示给用户）：');
+      if (!reason) return;
+      try {
+        await TXGJ.api(`/admin/api/recharge/${o.id}/reject`, { body: { reason } });
+        TXGJ.toast('已驳回', 'ok');
+        this.loadRcg();
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    openAdjust(u) {
+      this.adjustTarget = u;
+      this.adjustYuan = 0; this.adjustReason = ''; this.adjustVoucher = '';
+    },
+
+    async submitAdjust() {
+      const delta = Math.round(Number(this.adjustYuan) * 1000);
+      if (!delta) { TXGJ.toast('调整金额不能为 0', 'err'); return; }
+      if (!this.adjustReason.trim()) { TXGJ.toast('请填写原因', 'err'); return; }
+      if (!this.adjustVoucher.trim()) { TXGJ.toast('请填写凭证号', 'err'); return; }
+      this.adjustBusy = true;
+      try {
+        const r = await TXGJ.api(`/admin/api/users/${this.adjustTarget.id}/balance`, {
+          body: { delta_mill: delta, reason: this.adjustReason.trim(), voucher: this.adjustVoucher.trim() },
+        });
+        TXGJ.toast('已调整，余额 ¥' + r.balance_after_text.replace('¥',''), 'ok');
+        this.adjustTarget = null;
+        this.loadUsers(); this.loadDash();
+      } catch (e) { TXGJ.errToast(e); } finally { this.adjustBusy = false; }
+    },
+
+    async grantFree(u) {
+      // 页数不能写死 5：误伤补发、活动赠送、客服补偿的页数都不一样。
+      const ans = prompt(`给「${u.username}」补发多少页免费额度？`, '5');
+      if (ans === null) return;
+      const pages = parseInt(ans, 10);
+      if (!Number.isFinite(pages) || pages <= 0) { TXGJ.toast('页数必须是正整数', 'err'); return; }
+      try {
+        const r = await TXGJ.api(`/admin/api/users/${u.id}/grant-free`, { body: { pages } });
+        TXGJ.toast(`已补发 ${pages} 页，现共 ${r.free_pages_total} 页`, 'ok');
+        this.loadUsers(this.userOffset);
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async toggleStatus(u) {
+      const next = u.status === 'disabled' ? 'active' : 'disabled';
+      if (next === 'disabled' && !confirm(`停用「${u.username}」？停用后该账号无法登录，已有文件不再处理。`)) return;
+      try {
+        await TXGJ.api(`/admin/api/users/${u.id}/status`, { body: { status: next } });
+        TXGJ.toast(next === 'disabled' ? '已停用' : '已启用', 'ok');
+        this.loadUsers(this.userOffset);
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async submitSample() {
+      const short = this.qsTaskId.trim();
+      if (!short) { TXGJ.toast('请填任务短号', 'err'); return; }
+      // 用短号在前端匹配到完整 id（列表里已有）
+      const hit = this.tasks.find((t) => t.short_id === short) ||
+                  this.tasks.find((t) => t.id.startsWith(short));
+      if (!hit) { TXGJ.toast('先切到「任务」页刷新列表，才能按短号定位', 'err'); return; }
+      try {
+        this.q = await TXGJ.api('/admin/api/quality/sample', {
+          body: {
+            task_id: hit.id, page_no: this.qsPage,
+            order_ok: this.qsOrder, split_ok: this.qsSplit, bbox_ok: this.qsBbox,
+          },
+        });
+        TXGJ.toast('已记录', 'ok');
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async saveBbox() {
+      try {
+        const r = await TXGJ.api('/admin/api/settings/bbox', {
+          body: { enabled: this.bboxEnabled, gray_ratio: Number(this.bboxRatio) },
+        });
+        TXGJ.toast('已保存，30 秒内生效', 'ok');
+        this.loadSettings();
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async uploadQr(method, ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const fd = new FormData();
+      fd.append('file', f);
+      try {
+        const r = await TXGJ.api(`/admin/api/settings/pay-qr?method=${method}`, {
+          method: 'POST', body: fd,
+        });
+        this.qrMsg[method] = '已更新';
+        this.qrVer = Date.now();
+        TXGJ.toast('收款码已更新', 'ok');
+        this.loadSettings();
+      } catch (e) {
+        this.qrMsg[method] = '上传失败';
+        TXGJ.errToast(e);
+      }
+    },
+
+    async runCleanup() {
+      if (!confirm('立即清理已到期（>72h）的文件？')) return;
+      try {
+        const r = await TXGJ.api('/admin/api/cleanup/run', { method: 'POST' });
+        this.opMsg = `清理 ${r.cleaned} 个任务，失败 ${r.failed}，释放 ${TXGJ.fmtBytes(r.freed_bytes)}`;
+        TXGJ.toast('清理完成', 'ok');
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async expireBalance() {
+      if (!confirm('执行余额过期清零（按 balance_expire_at）？')) return;
+      try {
+        const r = await TXGJ.api('/admin/api/expire-balance', { method: 'POST' });
+        this.opMsg = `清零 ${r.users_cleared} 个用户的余额`;
+        TXGJ.toast('完成', 'ok');
+      } catch (e) { TXGJ.errToast(e); }
+    },
+  };
+}
+</script>
+{% endblock %}

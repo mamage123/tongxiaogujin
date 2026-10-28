@@ -1,0 +1,33 @@
+# 运行时数据（数据库、上传件、导出件）
+data/
+.pytest_tmp/
+.tmp/
+.env
+
+# 字体文件体积大且受授权约束，不入库（放本机 fonts/ 即可）
+fonts/*.ttf
+fonts/*.otf
+fonts/*.ttc
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv*/
+*.egg-info/
+
+# 系统
+.DS_Store
+
+# 真实样张（客户原件，体积大，本地跑分用；只保留说明文件）
+test/*
+!test/README.md
+
+# 截图产物（本地自查用，不入库）
+docs/shots/
+
+# 本地临时产物（导出/截图/自查，不入库）
+tmp/
+
+# WorkBuddy 本地工作记忆（可能含账号、余额等敏感记录，不入库）
+.workbuddy/

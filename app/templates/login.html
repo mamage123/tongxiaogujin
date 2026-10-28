@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}登录 / 注册 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap-narrow" x-data="auth()" x-cloak style="max-width:460px">
+  <h1 class="page-title" style="font-size:26px;margin-top:20px" x-text="tab === 'login' ? '登录' : '注册'"></h1>
+  <p class="page-sub">
+    <template x-if="tab === 'login'"><span>还没有账号？<a href="#" @click.prevent="tab='register'">点击注册</a></span></template>
+    <template x-if="tab === 'register'">
+      <span>注册即赠 <strong>{{ free_pages }} 页</strong>免费额度。<a href="#" @click.prevent="tab='login'">已有账号，去登录</a></span>
+    </template>
+  </p>
+
+  <div class="card card-pad">
+    <label class="fld">
+      <span class="lbl">用户名</span>
+      <input type="text" x-model="username" placeholder="至少 2 个字符" autocomplete="username">
+    </label>
+    <label class="fld">
+      <span class="lbl">密码</span>
+      <input type="password" x-model="password" :placeholder="tab === 'register' ? '至少 8 位' : '请输入密码'"
+             @keydown.enter="go()" :autocomplete="tab === 'login' ? 'current-password' : 'new-password'">
+      <div class="hint-line" x-show="tab === 'register'">账户内含余额，密码请勿与其他网站相同</div>
+    </label>
+
+    <template x-if="tab === 'register'">
+      <div>
+        <label class="fld">
+          <span class="lbl">邮箱（选填，用于找回密码与到账通知）</span>
+          <input type="email" x-model="email" placeholder="不填也能用，忘记密码需联系管理员重置">
+        </label>
+        <label class="checkline" style="margin-bottom:14px">
+          <input type="checkbox" x-model="agree">
+          <span>我已阅读并同意 <a href="/terms" target="_blank">《用户协议与版权声明》</a>，承诺上传内容拥有合法权利或已获授权。</span>
+        </label>
+      </div>
+    </template>
+
+    <template x-if="err">
+      <div class="alert alert-err" style="margin-bottom:12px">
+        <span>!</span><div x-text="err"></div>
+      </div>
+    </template>
+
+    <template x-if="withheld">
+      <div class="alert alert-warn" style="margin-bottom:12px">
+        <span>!</span>
+        <div>
+          <div><strong>账号已创建，但本次未发放免费额度。</strong></div>
+          <div class="small" style="margin-top:4px" x-text="withheld"></div>
+          <div class="small" style="margin-top:6px">
+            如需立即使用，可先充值（最低 ¥10）后识别；若你认为这是误判，请把用户名发给管理员核实后补发。
+          </div>
+          <button class="btn btn-seal btn-sm" style="margin-top:10px" @click="goNext()">
+            进入控制台
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <button class="btn btn-seal btn-block btn-lg" :disabled="busy" @click="go()">
+      <span class="spin" x-show="busy"></span>
+      <span x-text="busy ? '处理中…' : (tab === 'login' ? '登录' : '注册并登录')"></span>
+    </button>
+
+    <div class="divider"></div>
+    <div class="small muted" style="line-height:1.85">
+      <strong>关于找回密码：</strong>填了邮箱可用令牌自助重置；未填邮箱请提供注册时间或最近任务特征，
+      由管理员核实后人工重置（工作日 9:00-23:00）。
+    </div>
+
+    <div x-show="resetMode" style="margin-top:14px">
+      <div class="alert alert-info">
+        <span>i</span>
+        <div>
+          <div x-text="resetMsg"></div>
+          <template x-if="resetToken">
+            <div style="margin-top:8px">
+              <div class="small">重置令牌（30 分钟内有效）：</div>
+              <div class="mono small" style="word-break:break-all;background:#fff;padding:6px 8px;border-radius:6px;margin-top:4px"
+                   x-text="resetToken"></div>
+              <div style="margin-top:8px;display:flex;gap:8px">
+                <input type="password" x-model="newPwd" placeholder="输入新密码（≥8 位）" style="flex:1">
+                <button class="btn btn-sm btn-primary" @click="doReset()">重置</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;text-align:center">
+      <a href="#" class="small muted" @click.prevent="askReset()">忘记密码？</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const NEXT = new URLSearchParams(location.search).get('next') || '/';
+
+function auth() {
+  return {
+    tab: 'login',
+    username: '', password: '', email: '', agree: false,
+    busy: false, err: '', withheld: '',
+    resetMode: false, resetMsg: '', resetToken: '', newPwd: '',
+
+    init() {
+      if (location.search.includes('register')) this.tab = 'register';
+    },
+
+    // NEXT 是 script 顶层的 const，不挂在 window 上，
+    // Alpine 的 @click 表达式在 window 作用域求值，直接写 NEXT 会拿不到。
+    goNext() { location.href = NEXT; },
+
+    async go() {
+      this.err = '';
+      this.withheld = '';
+      if (!this.username.trim()) { this.err = '请输入用户名'; return; }
+      if (!this.password) { this.err = '请输入密码'; return; }
+      if (this.tab === 'register' && !this.agree) { this.err = '请先勾选同意用户协议与版权声明'; return; }
+
+      this.busy = true;
+      try {
+        if (this.tab === 'login') {
+          await TXGJ.api('/api/auth/login', { body: { username: this.username.trim(), password: this.password } });
+          location.href = NEXT;
+        } else {
+          const d = await TXGJ.api('/api/auth/register', {
+            body: {
+              username: this.username.trim(),
+              password: this.password,
+              email: this.email.trim() || null,
+              agree: this.agree,
+            },
+          });
+          // 防刷命中时后端会扣发免费额度。绝不能静默跳转——
+          // 那样用户只会看到"免费额度剩 0 页"，以为是系统坏了。
+          if (d && d.free_withheld) {
+            const why = d.withhold_reason === 'device' ? '同一设备' : '同一网络';
+            this.withheld = `24 小时内该${why}已注册过多个账号，防刷规则判定本次不再赠送免费页数。`;
+            this.busy = false;
+            return;
+          }
+          location.href = NEXT;
+        }
+      } catch (e) {
+        this.busy = false;
+        this.err = e.message || '操作失败';
+      }
+    },
+
+    async askReset() {
+      this.err = '';
+      if (!this.username.trim()) { this.err = '请先填写用户名，再点忘记密码'; return; }
+      try {
+        const d = await TXGJ.api('/api/auth/password/reset-request', { body: { username: this.username.trim() } });
+        this.resetMode = true;
+        this.resetMsg = d.message || '';
+        this.resetToken = d.token || '';
+      } catch (e) { this.err = e.message || '操作失败'; }
+    },
+
+    async doReset() {
+      try {
+        await TXGJ.api('/api/auth/password/reset', { body: { token: this.resetToken, password: this.newPwd } });
+        TXGJ.toast('密码已重置，正在进入', 'ok');
+        setTimeout(() => { location.href = NEXT; }, 700);
+      } catch (e) { TXGJ.errToast(e); }
+    },
+  };
+}
+</script>
+<style>[x-cloak]{display:none!important}</style>
+{% endblock %}

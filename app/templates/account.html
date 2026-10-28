@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}我的账户 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap" x-data="accountPage()" x-cloak>
+  <h1 class="page-title" style="font-size:26px;display:flex;align-items:center;gap:12px">
+    <span>我的账户</span>
+    {% if user and user.role == 'admin' %}
+      <a href="/admin" class="btn btn-sm btn-seal">管理后台</a>
+    {% endif %}
+  </h1>
+  <p class="page-sub" x-show="me">
+    <span x-text="me ? me.username : ''"></span>
+    · 注册于 <span x-text="me ? TXGJ.fmtTime(me.created_at) : ''"></span>
+  </p>
+
+  <template x-if="!me">
+    <div class="card card-pad">
+      <div class="small muted">请先登录。</div>
+      <a href="/login" class="btn btn-seal" style="margin-top:12px">去登录</a>
+    </div>
+  </template>
+
+  <template x-if="me">
+    <div>
+      <!-- 概览 -->
+      <div class="card card-pad">
+        <div class="stat-row">
+          <div class="stat">
+            <div class="sv" x-text="'¥' + TXGJ.yuan(me.balance_mill)"></div>
+            <div class="sl">余额</div>
+          </div>
+          <div class="stat">
+            <div class="sv" x-text="me.free_pages_left + ' 页'"></div>
+            <div class="sl" x-show="me.free_pages_total > 0">
+              免费额度剩余（共 <span x-text="me.free_pages_total"></span> 页）</div>
+            <div class="sl" x-show="me.free_pages_total === 0" style="color:var(--seal)">
+              本账号未获赠免费额度<br><span class="small">如认为误判，请联系管理员核实补发</span></div>
+          </div>
+          <div class="stat">
+            <div class="sv" x-text="me.consumed_text"></div>
+            <div class="sl">累计消费</div>
+          </div>
+          <div class="stat">
+            <div class="sv" x-text="tasks.length"></div>
+            <div class="sl">任务数</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+          <a href="/recharge" class="btn btn-seal btn-sm">充值</a>
+          <a href="/" class="btn btn-sm">开始识别</a>
+        </div>
+      </div>
+
+      <!-- 邮箱 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          邮箱<span class="hint">用于找回密码与到账通知，选填</span>
+        </div>
+        <div class="card-pad">
+          <template x-if="me.email">
+            <div class="small">
+              已绑定：<span class="mono" x-text="mask(me.email)"></span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:8px" @click="editingEmail = true">修改</button>
+            </div>
+          </template>
+          <template x-if="!me.email">
+            <div class="alert alert-warn">
+              <span>!</span>
+              <div>
+                你还没有填邮箱。忘记密码时只能联系管理员人工重置（需要提供注册时间或最近任务特征）。
+                建议现在补填，一分钟的事。
+              </div>
+            </div>
+          </template>
+
+          <template x-if="!me.email || editingEmail">
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <input type="email" x-model="emailInput" placeholder="you@example.com" style="flex:1">
+              <button class="btn btn-primary btn-sm" @click="saveEmail()" :disabled="!emailInput">保存</button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 流水 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">余额流水<span class="hint">充值、扣费、退款、调整全部在此</span></div>
+        <div class="card-pad" style="padding-top:6px">
+          <template x-if="ledger.length === 0">
+            <div class="small muted" style="padding:12px 0">暂无流水</div>
+          </template>
+          <table class="tbl" x-show="ledger.length">
+            <thead>
+              <tr><th>时间</th><th>类型</th><th class="num">金额</th><th class="num">余额</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="l in ledger" :key="l.id">
+                <tr>
+                  <td class="small muted" x-text="TXGJ.fmtTime(l.created_at)"></td>
+                  <td><span class="badge" :class="l.amount_mill > 0 ? 'badge-jade' : 'badge-gray'"
+                            x-text="typeLabel(l.type)"></span></td>
+                  <td class="num" :style="l.amount_mill > 0 ? 'color:var(--jade)' : ''"
+                      x-text="l.amount_text"></td>
+                  <td class="num" x-text="l.balance_after_text"></td>
+                  <td class="small">
+                    <span x-text="l.remark || ''"></span>
+                    <a x-show="l.task_short" :href="'/task/' + l.ref_id" class="small"
+                       x-text="l.task_short ? '　任务 ' + l.task_short : ''"></a>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 任务 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">我的任务</div>
+        <div class="card-pad" style="padding-top:6px">
+          <template x-if="tasks.length === 0">
+            <div class="small muted" style="padding:12px 0">还没有任务</div>
+          </template>
+          <table class="tbl" x-show="tasks.length">
+            <thead>
+              <tr><th>文件</th><th>页数</th><th>字数</th><th class="num">扣费</th><th>状态</th><th>时间</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="t in tasks" :key="t.id">
+                <tr @click="location.href='/task/' + t.id" style="cursor:pointer">
+                  <td x-text="t.filename"></td>
+                  <td x-text="t.pages_total"></td>
+                  <td x-text="t.chars.toLocaleString()"></td>
+                  <td class="num" x-text="t.amount_text"></td>
+                  <td><span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t.status)"></span></td>
+                  <td class="small muted" x-text="TXGJ.fmtTime(t.created_at)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+<style>[x-cloak]{display:none!important}</style>
+<script>
+function accountPage() {
+  return {
+    me: null, ledger: [], tasks: [], editingEmail: false, emailInput: '',
+
+    async init() {
+      try { this.me = await TXGJ.api('/api/auth/me'); } catch (_) {}
+      if (!this.me) return;
+      this.emailInput = this.me.email || '';
+      try { const d = await TXGJ.api('/api/billing/ledger?limit=50'); this.ledger = d.items || []; } catch (_) {}
+      try { const d = await TXGJ.api('/api/tasks?limit=50'); this.tasks = d.items || []; } catch (_) {}
+    },
+
+    mask(e) {
+      if (!e || e.indexOf('@') < 0) return e || '';
+      const [n, d] = e.split('@');
+      return (n.length > 2 ? n.slice(0, 2) : n.slice(0, 1)) + '***@' + d;
+    },
+
+    async saveEmail() {
+      try {
+        await TXGJ.api('/api/auth/me/email', { body: { email: this.emailInput.trim() } });
+        TXGJ.toast('已保存', 'ok');
+        this.me = await TXGJ.api('/api/auth/me');
+        this.editingEmail = false;
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    typeLabel(t) {
+      return ({ recharge: '充值', consume: '扣费', refund: '退款', adjust: '调整', expire: '过期清零' })[t] || t;
+    },
+    statusLabel(s) {
+      return ({ created: '已创建', preprocessing: '预处理', queued: '排队', processing: '识别中',
+        settling: '结算中', settled: '已完成', partial: '部分完成', failed: '失败',
+        cancelled: '已取消', locked: '待补款', expired: '已过期' })[s] || s;
+    },
+    statusClass(s) {
+      if (s === 'settled') return 'badge-jade';
+      if (s === 'locked' || s === 'failed') return 'badge-seal';
+      if (s === 'partial') return 'badge-amber';
+      return 'badge-gray';
+    },
+  };
+}
+</script>
+{% endblock %}

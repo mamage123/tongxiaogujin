@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% block title %}{{ site_name }} · 古籍图片与 PDF 转可读文本{% endblock %}
+
+{% block body %}
+<div class="wrap" x-data="uploader()" x-cloak>
+  <h1 class="page-title">把古籍扫描件，变成能直接读的文本</h1>
+  <p class="page-sub">
+    支持繁体竖排、现代横排与公式文档。识别后可导出横排 Word、竖排 PDF，逐字对照原图核对。
+  </p>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start"
+       class="home-grid">
+    <div>
+      <!-- 上传区 -->
+      <div class="card">
+        <div class="card-hd">
+          1. 上传文件
+          <span class="hint">JPG / PNG / BMP / PDF，单文件 ≤ {{ max_upload_mb }}MB</span>
+        </div>
+        <div class="card-pad">
+          <div class="dropzone" :class="{drag: dragging}"
+               @dragover.prevent="dragging=true" @dragleave.prevent="dragging=false"
+               @drop.prevent="onDrop($event)" @click="$refs.file.click()">
+            <div class="dz-icon">文</div>
+            <div class="dz-main" x-show="!file">拖拽文件到这里，或点击选择</div>
+            <div class="dz-main" x-show="file" x-text="file ? file.name : ''"></div>
+            <div class="dz-sub" x-show="!file">
+              支持多页 PDF；扫描件建议短边 ≥1000px
+            </div>
+            <div class="dz-sub" x-show="file">
+              <span x-text="file ? TXGJ.fmtBytes(file.size) : ''"></span>
+              <template x-if="probe">
+                <span>　·　<span x-text="probe.pages"></span> 页<span x-show="probe.file_type === 'pdf'">的 PDF</span></span>
+              </template>
+            </div>
+          </div>
+          <input type="file" x-ref="file" accept=".jpg,.jpeg,.png,.bmp,.pdf" style="display:none"
+                 @change="pick($event.target.files[0])">
+
+          <template x-if="probe && probe.warning">
+            <div class="alert alert-warn" style="margin-top:12px">
+              <span>⚠</span><div x-text="probe.warning"></div>
+            </div>
+          </template>
+
+          <!-- PDF 选页 -->
+          <template x-if="probe && probe.file_type === 'pdf'">
+            <div style="margin-top:16px">
+              <label class="fld">
+                <span class="lbl">识别哪些页</span>
+                <input type="text" x-model="pageRange" placeholder="all 表示全部；也可填 1-50">
+                <div class="hint-line">
+                  共 <span x-text="probe.pages"></span> 页。填 <code>all</code> 识别全部，填 <code>1-50</code> 只识别第 1 到 50 页。
+                  <span x-show="pageLimitHint" x-text="pageLimitHint"></span>
+                </div>
+              </label>
+            </div>
+          </template>
+
+          <!-- 上传进度 -->
+          <div x-show="uploading" style="margin-top:14px">
+            <div class="progress"><i :style="`width:${progress}%`"></i></div>
+            <div class="small muted" style="margin-top:6px">
+              正在上传 <span x-text="progress"></span>%　·　大文件请勿关闭页面
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模式 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          2. 选择识别模式
+          <span class="hint">选错会影响行序与标点</span>
+        </div>
+        <div class="card-pad">
+          <div class="mode-grid">
+            <template x-for="m in modes" :key="m.value">
+              <div class="mode-item" :class="{on: mode === m.value}" @click="mode = m.value">
+                <div class="mt" x-text="m.label"></div>
+                <div class="md" x-text="m.desc"></div>
+              </div>
+            </template>
+          </div>
+
+          <label class="checkline" style="margin-top:16px">
+            <input type="checkbox" x-model="optimize">
+            <span>
+              <strong>格式优化</strong>（默认开启）：自动整理段落、修正标点与错误换行，适合直接阅读。
+              关闭则保留原始换行。两种都会导出 Word 与 PDF。
+            </span>
+          </label>
+
+          <template x-if="estimate">
+            <div class="alert alert-info" style="margin-top:14px">
+              <span>i</span>
+              <div>
+                <div>
+                  <template x-if="estimate.free_only">
+                    <span>其中 <strong x-text="estimate.pages"></strong> 页在免费额度内，<strong>本次不扣费</strong>，且可下载全部格式。</span>
+                  </template>
+                  <template x-if="!estimate.free_only">
+                    <span>
+                      共 <strong x-text="estimate.pages"></strong> 页，其中
+                      <strong x-text="estimate.free_pages_applied"></strong> 页在免费额度内。
+                      预计扣费约 <strong x-text="estimate.estimated_amount_text"></strong>
+                      （上限估算，按实际识别字数结算）。
+                    </span>
+                  </template>
+                </div>
+                <div class="small muted" style="margin-top:4px">
+                  余额 ¥<span x-text="TXGJ.yuan(estimate.balance_mill)"></span>
+                  　·　免费额度剩 <span x-text="estimate.free_pages_left"></span> 页
+                  　·　<span x-text="estimate.note"></span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="err">
+            <div class="alert alert-err" style="margin-top:14px">
+              <span>!</span><div x-text="err"></div>
+            </div>
+          </template>
+
+          <div style="display:flex;gap:10px;align-items:center;margin-top:18px">
+            <button class="btn btn-seal btn-lg" :disabled="!file || uploading || submitting"
+                    @click="submit()">
+              <span class="spin" x-show="uploading || submitting"></span>
+              <span x-text="submitLabel()"></span>
+            </button>
+            <span class="small muted" x-show="!isLoggedIn">
+              需要先登录（注册即赠 {{ free_pages }} 页免费额度）
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 说明 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">怎么算钱</div>
+        <div class="card-pad">
+          <div class="stat-row" style="margin-bottom:14px">
+            <div class="stat"><div class="sv">¥1</div><div class="sl">每 1 万字</div></div>
+            <div class="stat"><div class="sv">1000 字</div><div class="sl">最低计费单位</div></div>
+            <div class="stat"><div class="sv">{{ free_pages }} 页</div><div class="sl">新账号免费额度</div></div>
+            <div class="stat"><div class="sv">{{ ttl_hours }} h</div><div class="sl">文件保留时长</div></div>
+          </div>
+          <div class="small muted" style="line-height:1.9">
+            · 按识别出的字数计费，<strong>不足 1000 字按 1000 字计算</strong>（约 ¥0.10）。<br>
+            · 免费额度内的页不扣费，且<strong>可下载全部格式</strong>；失败页与空白页不消耗额度。<br>
+            · 双页拆分、裁边、行序还原、格式优化、框层、<strong>全部导出格式都不额外收费</strong>。<br>
+            · 识别失败自动退回余额；余额不足时扣至 0 并锁下载，充值后自动解锁。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧 -->
+    <aside>
+      <div class="card">
+        <div class="card-hd">我的额度</div>
+        <div class="card-pad">
+          <template x-if="isLoggedIn">
+            <div>
+              <div class="stat" style="margin-bottom:12px">
+                <div class="sv" x-text="me ? me.free_pages_left : '—'"></div>
+                <div class="sl">免费页剩余（共 <span x-text="me ? me.free_pages_total : '—'"></span> 页）</div>
+              </div>
+              <div class="stat" style="margin-bottom:14px">
+                <div class="sv" x-text="me ? '¥' + TXGJ.yuan(me.balance_mill) : '—'"></div>
+                <div class="sl">账户余额</div>
+              </div>
+              <a href="/recharge" class="btn btn-sm btn-block">充值</a>
+            </div>
+          </template>
+          <template x-if="!isLoggedIn">
+            <div>
+              <div class="small muted" style="margin-bottom:12px">
+                注册即赠 {{ free_pages }} 页免费额度，不需要手机号。
+              </div>
+              <a href="/login" class="btn btn-seal btn-block">注册 / 登录</a>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">最近任务</div>
+        <div class="card-pad" style="padding-top:8px">
+          <template x-if="recent.length === 0">
+            <div class="small muted" style="padding:10px 0">还没有任务</div>
+          </template>
+          <template x-for="t in recent" :key="t.id">
+            <a :href="'/task/' + t.id" style="display:block;padding:9px 0;border-bottom:1px solid var(--line-2);color:inherit">
+              <div style="display:flex;justify-content:space-between;gap:8px">
+                <span style="font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                      x-text="t.filename"></span>
+                <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t.status)"></span>
+              </div>
+              <div class="small muted">
+                <span x-text="t.pages_total"></span> 页 · <span x-text="TXGJ.relTime(t.created_at)"></span>
+              </div>
+            </a>
+          </template>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">隐私</div>
+        <div class="card-pad small muted" style="line-height:1.9">
+          原始文件仅用于本次识别，不做公开传播；生成文件最长保留 {{ ttl_hours }} 小时，
+          到期自动彻底删除。我们不会把上传内容用于训练。
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<style>[x-cloak]{display:none!important}
+@media (max-width: 980px){ .home-grid{grid-template-columns:1fr!important} }
+</style>
+
+<script>
+const CFG = {
+  modes: {{ ({"value":"ancient","label":"繁体竖排古籍","desc":"古籍扫描件，自动繁→简"},
+             {"value":"formula","label":"现代公式 / 简体","desc":"含数学公式、表格的教材论文"},
+             {"value":"modern","label":"现代横排","desc":"普通现代中文书籍文档"}) | tojson }},
+  freePages: {{ free_pages }},
+  loggedIn: {{ 'true' if user else 'false' }},
+};
+
+function uploader() {
+  return {
+    modes: CFG.modes,
+    mode: 'ancient',
+    optimize: true,
+    file: null,
+    probe: null,
+    pageRange: 'all',
+    dragging: false,
+    uploading: false,
+    submitting: false,
+    progress: 0,
+    err: '',
+    estimate: null,
+    isLoggedIn: CFG.loggedIn,
+    me: null,
+    recent: [],
+    pageLimitHint: '',
+
+    init() {
+      if (this.isLoggedIn) {
+        TXGJ.api('/api/auth/me').then((u) => { this.me = u; }).catch(() => {});
+        TXGJ.api('/api/tasks?limit=5').then((d) => { this.recent = d.items || []; }).catch(() => {});
+      }
+    },
+
+    pick(f) { if (f) this.setFile(f); },
+    onDrop(e) {
+      this.dragging = false;
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) this.setFile(f);
+    },
+
+    setFile(f) {
+      this.err = ''; this.probe = null; this.estimate = null;
+      const ok = /\.(jpe?g|png|bmp|pdf)$/i.test(f.name);
+      if (!ok) { this.err = '仅支持 JPG / PNG / BMP / PDF'; return; }
+      if (f.size > {{ max_upload_mb }} * 1024 * 1024) {
+        this.err = '单文件不能超过 {{ max_upload_mb }}MB'; return;
+      }
+      this.file = f;
+      this.pageRange = 'all';
+    },
+
+    submitLabel() {
+      if (this.uploading) return '上传中…';
+      if (this.submitting) return '提交中…';
+      return '开始识别';
+    },
+
+    async submit() {
+      this.err = '';
+      if (!this.file) { this.err = '请先选择文件'; return; }
+      if (!this.isLoggedIn) { location.href = '/login?next=/'; return; }
+
+      this.uploading = true; this.progress = 0;
+      let done;
+      try {
+        done = await TXGJ.uploadFile(this.file, (p) => { this.progress = p; });
+        this.probe = done;
+      } catch (e) {
+        this.uploading = false;
+        this.err = e.message || '上传失败';
+        TXGJ.errToast(e);
+        return;
+      }
+      this.uploading = false;
+      this.submitting = true;
+      try {
+        const task = await TXGJ.api('/api/tasks', {
+          body: {
+            upload_id: done.upload_id,
+            mode: this.mode,
+            optimize: this.optimize,
+            page_range: this.pageRange || 'all',
+          },
+        });
+        location.href = '/task/' + task.id;
+      } catch (e) {
+        this.submitting = false;
+        this.err = e.message || '提交失败';
+        if (e.code === 'E_NO_BALANCE') this.err += '　→ 点右侧「充值」';
+        TXGJ.errToast(e);
+      }
+    },
+
+    statusLabel(s) {
+      return ({
+        created: '已创建', preprocessing: '预处理', queued: '排队', processing: '识别中',
+        settling: '结算中', settled: '已完成', partial: '部分完成', failed: '失败',
+        cancelled: '已取消', locked: '待补款', expired: '已过期',
+      })[s] || s;
+    },
+    statusClass(s) {
+      if (s === 'settled') return 'badge-jade';
+      if (s === 'locked') return 'badge-seal';
+      if (s === 'failed') return 'badge-seal';
+      if (s === 'partial') return 'badge-amber';
+      return 'badge-gray';
+    },
+  };
+}
+</script>
+{% endblock %}

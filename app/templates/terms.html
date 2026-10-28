@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}用户协议与版权声明 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap-narrow" style="max-width:800px">
+  <h1 class="page-title" style="font-size:26px">用户协议与版权声明</h1>
+  <p class="page-sub">版本 {{ agreement.version }}　·　注册即表示你已阅读并同意以下全部条款</p>
+
+  <div class="card card-pad">
+    <ol style="padding-left:20px;line-height:2;margin:0">
+      {% for p in agreement.points %}
+      <li style="margin-bottom:8px">{{ p }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-hd">数据处理说明</div>
+    <div class="card-pad small" style="line-height:2">
+      <p style="margin-top:0">
+        <strong>我们做什么：</strong>用户上传的图片或 PDF 会被发送至第三方 OCR 服务进行文字识别，
+        识别结果保存在本平台，用于生成用户下载的文件。
+      </p>
+      <p>
+        <strong>我们不做：</strong>不将用户上传的原始文件用于训练任何模型；
+        不公开传播、不出售、不向无关第三方提供。
+      </p>
+      <p>
+        <strong>保留期限：</strong>上传的原始文件与生成的文件最多保留 <strong>72 小时</strong>，
+        到期由定时任务从存储中物理删除，并在数据库中标记为已清理。
+      </p>
+      <p>
+        <strong>AI 生成说明：</strong>依据《人工智能生成合成内容标识办法》，
+        本平台导出的所有文件均带有「本文件由 AI 识别生成，供参考」标识。
+        识别结果可能存在误差，用于学术引用前请核对原件。
+      </p>
+      <p style="margin-bottom:0">
+        <strong>余额说明：</strong>余额仅可用于本平台识别服务，不可提现、不可转让。
+        如本平台停止提供服务，未使用的余额将全额退还。
+      </p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-hd">免责声明</div>
+    <div class="card-pad small" style="line-height:2">
+      本平台仅提供文字识别与排版转换的技术服务，不对用户上传内容的合法性进行实质审查，
+      亦不对识别结果的准确性作出保证。因用户上传内容引发的版权或其他法律纠纷，
+      由上传者自行承担。
+    </div>
+  </div>
+
+  <div style="margin-top:20px">
+    <a href="/login" class="btn btn-primary">返回登录 / 注册</a>
+  </div>
+</div>
+{% endblock %}

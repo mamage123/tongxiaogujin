@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ site_name }} · {{ tagline }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v() }}">
+<script defer src="/static/vendor/alpine.min.js"></script>
+<script src="/static/app.js?v={{ asset_v() }}"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="/">
+      <span class="brand-dot">古</span>
+      <span class="brand-name">{{ site_name }}</span>
+      <span class="brand-sub">{{ tagline }}</span>
+    </a>
+    <div class="spacer"></div>
+    <nav class="topnav">
+      <a href="/">识别</a>
+      <a href="/account">我的</a>
+      <a href="/recharge">充值</a>
+      <a href="/terms">协议</a>
+      {# 后台入口：之前全站没有链接，管理员只能手输 /admin，等于把后台藏起来了。 #}
+      {% if user and user.role == 'admin' %}
+        <a href="/admin" class="nav-admin" title="管理后台">管理后台</a>
+      {% endif %}
+      {% if user %}
+        <span class="badge badge-amber" title="账户余额">余额 ¥{{ '%.2f' % (user.balance_mill / 1000) }}</span>
+        <span class="badge badge-jade" title="免费额度剩余">
+          免费 {{ user.free_pages_total - user.free_pages_used }} 页</span>
+        <span class="muted small">{{ user.username }}</span>
+        <button class="btn btn-sm btn-ghost" onclick="TXGJ.api('/api/auth/logout',{method:'POST'}).then(()=>location.href='/')">退出</button>
+      {% else %}
+        <a href="/login" class="btn btn-sm">登录 / 注册</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+
+{% block body %}{% endblock %}
+
+<footer class="site">
+  <div>
+    <strong>{{ site_name }}</strong> · {{ tagline }}　|　识别结果由 AI 生成，仅供参考，引用请核对原件
+  </div>
+  <div>
+    文件最多保留 {{ ttl_hours }} 小时，到期自动彻底删除　|　余额不可提现，平台停止服务时未使用余额全额退还
+  </div>
+  <div class="small" style="margin-top:6px">
+    <a href="/terms">用户协议与版权声明</a>　·　
+    <a href="/account">我的账户</a>　·　
+    <a href="/recharge">充值</a>
+    <span id="beian-slot"></span>
+  </div>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

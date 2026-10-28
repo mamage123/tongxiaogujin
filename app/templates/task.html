@@ -1,0 +1,542 @@
+{% extends "base.html" %}
+{% block title %}识别结果 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap" x-data="taskView('{{ task_id }}')" x-cloak>
+
+  <!-- 头部 -->
+  <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+    <h1 class="page-title" style="font-size:24px;margin:0" x-text="task ? task.filename : '加载中…'"></h1>
+    <span class="badge" :class="statusClass()" x-text="statusLabel()"></span>
+    <div class="spacer" style="flex:1"></div>
+    <template x-if="task && task.can_cancel">
+      <button class="btn btn-sm" @click="cancel()">取消任务</button>
+    </template>
+    <a href="/" class="btn btn-sm btn-ghost">返回首页</a>
+  </div>
+  <p class="page-sub" style="margin-bottom:16px">
+    任务号 <span class="mono" x-text="task ? task.short_id : ''"></span>
+    · <span x-text="modeLabel()"></span>
+    · 共 <span x-text="task ? task.pages_total : '—'"></span> 页
+    · <span x-text="task ? TXGJ.fmtTime(task.created_at) : ''"></span>
+    <span x-show="task">· 文件保留至 <span x-text="task ? TXGJ.fmtTime(task.expire_at) : ''"></span></span>
+  </p>
+  <!-- 双页合拍：不提示的话用户会以为「只传了一张图，怎么扣了两页额度」 -->
+  <template x-if="task && task.spread_split">
+    <p class="small muted" style="margin:-8px 0 14px">
+      这张图是双页合拍，已按中缝自动拆成左右两页分别识别（古籍右页在前、左页在后）。
+      拆分不增加费用，但两页各占 1 页识别额度。
+    </p>
+  </template>
+
+  <!-- 进度 / 结算提示 -->
+  <template x-if="task && !['settled','partial','failed','expired','cancelled'].includes(task.status)">
+    <div class="card card-pad" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:8px">
+        <span>识别中：已完成 <strong x-text="progress.done"></strong> / <span x-text="progress.total"></span> 页
+          <span class="muted" x-show="progress.failed > 0">（<span x-text="progress.failed"></span> 页失败）</span>
+        </span>
+        <span class="muted small" x-text="task.status === 'queued' ? '排队中，通常很快开始' : '页面可关闭，后台会继续处理'"></span>
+      </div>
+      <div class="progress"><i :style="`width:${percent()}%`"></i></div>
+    </div>
+  </template>
+
+  <!-- 状态横幅 -->
+  <template x-if="banner()">
+    <div class="alert" :class="banner().cls" style="margin-bottom:14px">
+      <span x-text="banner().icon"></span>
+      <div style="flex:1">
+        <div x-html="banner().text"></div>
+        <div class="small" style="margin-top:6px" x-show="banner().sub" x-text="banner().sub"></div>
+      </div>
+      <a class="btn btn-sm btn-seal" href="/recharge" x-show="task && task.status === 'locked'">去充值</a>
+      <a class="btn btn-sm" href="/" x-show="task && ['expired','failed'].includes(task.status)">重新识别</a>
+    </div>
+  </template>
+
+  <!-- 主体 -->
+  <div class="result-grid">
+    <!-- 左：原图 -->
+    <div class="card">
+      <div class="card-hd">
+        原图
+        <span class="hint" x-text="task ? ('第 ' + pageNo + ' / ' + task.pages_total + ' 页' + halfLabel()) : ''"></span>
+        <div class="spacer" style="flex:1"></div>
+        <label class="checkline" style="font-size:12.5px">
+          <input type="checkbox" x-model="showBoxes" @change="renderBoxes()"> 显示定位框
+        </label>
+      </div>
+      <div class="card-pad" style="padding:12px">
+        <div class="imgpane" x-ref="pane">
+          <template x-if="imageUrl && !imgError">
+            <img :src="imageUrl" @load="onImgLoad()" @error="imgError = true" alt="原图">
+          </template>
+          <div x-show="!imageUrl || imgError" class="small muted" style="padding:40px;text-align:center">
+            <template x-if="imgError && task && ['created','preprocessing','queued','processing','settling'].includes(task.status)">
+              <span>
+                <span class="spinner"></span>
+                正在识别中，原图生成后自动显示…              </span>
+            </template>
+            <template x-if="!(imgError && task && ['created','preprocessing','queued','processing','settling'].includes(task.status))">
+              <span>该页暂无可显示的原图（可能已过期）</span>
+            </template>
+          </div>
+          <template x-for="b in boxes" :key="b.seq">
+            <div class="box" :class="['l-' + b.label, activeBox === b.seq ? 'active' : '']"
+                 :data-seq="b.seq"
+                 :style="`left:${b.left}%;top:${b.top}%;width:${b.w}%;height:${b.h}%`"
+                 @mouseenter="activeBox = b.seq"
+                 @mouseleave="activeBox = null"
+                 @click="focusText(b.seq)"></div>
+          </template>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" @click="goPage(pageNo - 1)" :disabled="pageNo <= 1">上一页</button>
+          <button class="btn btn-sm" @click="goPage(pageNo + 1)"
+                  :disabled="task && pageNo >= task.pages_total">下一页</button>
+          <span class="small muted" x-show="!bboxOk" x-text="bboxNote"></span>
+        </div>
+
+        <!-- 页列表 -->
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:12px">
+          <template x-for="p in pages" :key="p.page_no">
+            <button class="btn btn-sm pgbtn" style="padding:3px 9px;font-size:12px;min-width:34px"
+                    :class="[p.page_no === pageNo ? 'btn-primary' : '', pageCls(p)]"
+                    :title="pageTitle(p)"
+                    @click="goPage(p.page_no)"
+                    x-text="p.page_no"></button>
+          </template>
+        </div>
+        <div class="small muted" style="margin-top:8px">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--jade)"></span> 完成
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--seal);margin-left:10px"></span> 失败
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);margin-left:10px"></span> 识别中
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--line);margin-left:10px"></span> 空白/待处理
+        </div>
+      </div>
+    </div>
+
+    <!-- 右：文本 -->
+    <div class="card">
+      <div class="card-hd">
+        识别文本
+        <span class="hint" x-text="task ? (task.chars.toLocaleString() + ' 字') : ''"></span>
+        <div class="spacer" style="flex:1"></div>
+        <button class="btn btn-sm btn-ghost" @click="copyAll()">复制全文</button>
+      </div>
+      <div class="card-pad" style="padding:12px">
+        <div class="textpane" x-ref="textpane">
+          <template x-if="!blocks.length">
+            <div class="para empty">
+              <span x-text="emptyText()"></span>
+              <template x-if="pageInfo && pageInfo.status === 'failed'">
+                <span style="display:block;margin-top:10px">
+                  <button class="btn btn-sm" @click="retryCurrent()">重试本页</button>
+                </span>
+              </template>
+            </div>
+          </template>
+          <template x-for="b in blocks" :key="b.seq">
+            <p class="para" :class="b.seq === activeBox ? 'active' : ''"
+               :data-seq="b.seq"
+               @mouseenter="activeBox = b.seq"
+               @mouseleave="activeBox = null"
+               @click="focusBox(b.seq)">
+              <span class="seq" x-text="b.seq"></span><span x-text="b.text"></span>
+            </p>
+          </template>
+        </div>
+
+        <div class="small muted" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+          <span x-show="pageInfo.order_check_passed === 1">行序自检通过</span>
+          <span x-show="pageInfo.order_check_passed === 0" class="badge badge-amber">行序存疑，请对照原图核对</span>
+          <template x-if="failedPages.length">
+            <a href="#" @click.prevent="retryFailed()" x-text="'重试失败页（' + failedPages.length + '）'"></a>
+          </template>
+        </div>
+
+        <!-- 先看后买：三种排版都能在下载前预览（与最终 PDF 同源同 CSS） -->
+        <div class="preview-bar">
+          <span class="pb-lb">下载前先看排版</span>
+          <a href="#" @click.prevent="openPreview('horiz')">横排预览</a>
+          <a href="#" @click.prevent="openPreview('vert')">竖排预览</a>
+          <a href="#" @click.prevent="openPreview('proof')">校对版预览</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 下载面板 -->
+  <div class="card" style="margin-top:18px">
+    <div class="card-hd">
+      下载
+      <span class="hint" x-text="task && task.can_download ? '本任务已付费，全部格式可任意下载，不会再次扣费' : '完成后即可下载'"></span>
+    </div>
+    <div class="card-pad">
+      <template x-if="task && task.status === 'locked'">
+        <div class="alert alert-err" style="margin-bottom:14px">
+          <span>!</span>
+          <div>
+            余额不足，还差 <strong>¥<span x-text="TXGJ.yuan(task.pending_mill)"></span></strong>。
+            文本可以正常查看和复制，充值后自动解锁全部下载。
+          </div>
+          <a href="/recharge" class="btn btn-sm btn-seal">去充值</a>
+        </div>
+      </template>
+
+      <div class="dl-grid">
+        <!-- 竖排 -->
+        <div class="dl-card" :class="task && !task.can_download ? 'locked' : ''">
+          <div class="dt">竖排阅读版</div>
+          <div class="dd">
+            右起竖排、按列分栏，像翻阅原书，适合打印装订。
+            <div style="margin-top:6px;display:flex;gap:6px">
+              <button class="btn btn-sm" :class="lang === 'simp' ? 'btn-primary' : ''"
+                      @click="lang='simp'">简体</button>
+              <button class="btn btn-sm" :class="lang === 'trad' ? 'btn-primary' : ''"
+                      @click="lang='trad'">繁体原字</button>
+            </div>
+          </div>
+          <button class="btn btn-seal btn-block" :disabled="!task || !task.can_download || busy.vert"
+                  @click="doExport(lang === 'trad' ? 'vert_pdf_trad' : 'vert_pdf')">
+            <span class="spin" x-show="busy.vert"></span>下载 PDF
+          </button>
+        </div>
+
+        <!-- 横排 -->
+        <div class="dl-card" :class="task && !task.can_download ? 'locked' : ''">
+          <div class="dt">横排阅读版</div>
+          <div class="dd">
+            横排段落，可在 Word 里直接编辑、引用、检索。
+          </div>
+          <button class="btn btn-primary btn-block" :disabled="!task || !task.can_download || busy.docx"
+                  @click="doExport('horiz_docx')">
+            <span class="spin" x-show="busy.docx"></span>下载 Word
+          </button>
+          <button class="btn btn-sm btn-block" :disabled="!task || !task.can_download || busy.hpdf"
+                  @click="doExport('horiz_pdf')">
+            <span class="spin" x-show="busy.hpdf"></span>下载 PDF
+          </button>
+        </div>
+
+        <!-- 校对 -->
+        <div class="dl-card" :class="task && !task.can_download ? 'locked' : ''">
+          <div class="dt">校对版</div>
+          <div class="dd">
+            左原图带框、右文字带序号，用于逐字核对。适合整理与留证。
+          </div>
+          <button class="btn btn-block" :disabled="!task || !task.can_download || busy.proof"
+                  @click="doExport('proof_pdf')">
+            <span class="spin" x-show="busy.proof"></span>下载 PDF
+          </button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+        <a href="#" @click.prevent="copyAll()">复制纯文本</a>
+        <a href="#" @click.prevent="doExport('markdown')">下载 Markdown</a>
+        <a href="#" @click.prevent="doExport('zip')">全部下载（ZIP）</a>
+        <span class="muted small" x-show="lastExport" x-text="lastExport"></span>
+      </div>
+
+      <template x-if="task && task.status === 'settled' && task.amount_mill === 0">
+        <div class="alert alert-ok" style="margin-top:14px">
+          <span>✓</span>
+          <div>本次在免费额度内，<strong>不扣费</strong>，全部格式都可以下载。</div>
+        </div>
+      </template>
+
+      <template x-if="task && task.amount_mill > 0">
+        <div class="small muted" style="margin-top:12px">
+          本次扣费 ¥<span x-text="TXGJ.yuan(task.amount_mill)"></span>
+          （<span x-text="task.chars.toLocaleString()"></span> 字，
+          免费额度抵扣 <span x-text="task.free_pages_applied"></span> 页）
+          <template x-if="task.chars < 1000">
+            <span>　·　不足 1000 字按 1000 字计费</span>
+          </template>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<style>[x-cloak]{display:none!important}</style>
+
+<script>
+function taskView(taskId) {
+  return {
+    taskId,
+    task: null,
+    pages: [],
+    progress: { done: 0, total: 0, failed: 0 },
+    pageNo: 1,
+    pageInfo: {},
+    blocks: [],
+    boxes: [],
+    activeBox: null,
+    showBoxes: true,
+    bboxOk: true,
+    bboxNote: '',
+    imageUrl: '',
+    imgReady: false,
+    imgError: false,
+    lang: 'simp',
+    busy: { vert: false, docx: false, hpdf: false, proof: false },
+    lastExport: '',
+    timer: null,
+
+    init() {
+      this.load();
+      this.timer = setInterval(() => this.tick(), 2200);
+    },
+
+    async load() {
+      try {
+        const t = await TXGJ.api('/api/tasks/' + taskId);
+        this.task = t;
+        this.pages = t.pages || [];
+        this.progress = t.progress || { done: 0, total: 0, failed: 0 };
+
+        if (!this.pages.find((p) => p.page_no === this.pageNo)) {
+          const first = this.pages.find((p) => p.status === 'done' || p.status === 'empty');
+          this.pageNo = first ? first.page_no : (this.pages[0] ? this.pages[0].page_no : 1);
+        }
+        await this.loadPage();
+        if (['settled', 'partial', 'locked', 'failed', 'expired', 'cancelled'].includes(t.status)) {
+          clearInterval(this.timer);
+        }
+      } catch (e) {
+        TXGJ.errToast(e);
+      }
+    },
+
+    tick() {
+      if (!this.task) return;
+      const running = ['created', 'preprocessing', 'queued', 'processing', 'settling'].includes(this.task.status);
+      if (running) this.load();
+      else clearInterval(this.timer);
+    },
+
+    async loadPage() {
+      this.blocks = []; this.boxes = []; this.activeBox = null; this.bboxOk = true;
+      this.imgError = false;
+      const p = this.pages.find((x) => x.page_no === this.pageNo);
+      this.pageInfo = p || {};
+      this.imageUrl = (this.task && this.task.status !== 'expired')
+        ? `/api/tasks/${taskId}/pages/${this.pageNo}/image?t=${Date.now()}` : '';
+      try {
+        const d = await TXGJ.api(`/api/tasks/${taskId}/pages/${this.pageNo}/blocks`);
+        this.bboxOk = d.bbox_ok;
+        this.bboxNote = d.bbox_ok ? '' : '本页坐标不可用，已隐藏定位框';
+        if (!d.bbox_enabled) { this.showBoxes = false; this.bboxNote = '定位框已由管理员暂时关闭'; }
+        const w = d.width, h = d.height;
+        this.blocks = (d.blocks || []).map((b, i) => ({
+          seq: i + 1, text: b.text, label: b.label, bbox: b.bbox,
+        }));
+        this.boxes = (d.blocks || []).map((b, i) => {
+          const [x1, y1, x2, y2] = b.bbox;
+          return {
+            seq: i + 1, label: b.label,
+            left: w ? (x1 / w) * 100 : 0,
+            top: h ? (y1 / h) * 100 : 0,
+            w: w ? Math.max(0.3, ((x2 - x1) / w) * 100) : 0,
+            h: h ? Math.max(0.3, ((y2 - y1) / h) * 100) : 0,
+          };
+        });
+      } catch (e) {
+        this.blocks = []; this.boxes = [];
+      }
+      this.renderBoxes();
+    },
+
+    onImgLoad() { this.imgReady = true; this.renderBoxes(); },
+
+    renderBoxes() {
+      const pane = this.$refs.pane;
+      if (!pane) return;
+      pane.querySelectorAll('.box').forEach((el) => {
+        el.style.display = (this.showBoxes && this.bboxOk) ? '' : 'none';
+      });
+    },
+
+    goPage(n) {
+      if (!this.task) return;
+      if (n < 1 || n > this.task.pages_total) return;
+      this.pageNo = n;
+      this.loadPage();
+    },
+
+    focusText(seq) {
+      const el = this.$refs.textpane.querySelector(`.para[data-seq="${seq}"]`);
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      this.activeBox = seq;
+    },
+
+    focusBox(seq) {
+      const el = this.$refs.pane.querySelector(`.box[data-seq="${seq}"]`);
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      this.activeBox = seq;
+    },
+
+    async copyAll() {
+      if (!this.task || !this.task.text) { TXGJ.toast('暂无可复制文本', 'err'); return; }
+      await TXGJ.copy(this.task.text);
+    },
+
+    openPreview(layout) {
+      const lay = ['horiz', 'vert', 'proof'].includes(layout) ? layout : 'horiz';
+      window.open(`/api/tasks/${taskId}/preview?layout=${lay}&lang=${this.lang}`, '_blank');
+    },
+
+    async doExport(kind) {
+      const key = { vert_pdf: 'vert', vert_pdf_trad: 'vert', horiz_docx: 'docx', horiz_pdf: 'hpdf', proof_pdf: 'proof' }[kind] || 'other';
+      if (this.busy[key] !== undefined) this.busy[key] = true;
+      else this.busy[key] = true;
+      this.lastExport = '';
+      try {
+        const r = await TXGJ.api(`/api/tasks/${taskId}/exports`, {
+          body: { kind, lang: kind === 'vert_pdf_trad' ? 'trad' : this.lang },
+        });
+        this.lastExport = `${r.size ? TXGJ.fmtBytes(r.size) : ''}${r.cache_hit ? ' · 已复用之前生成的文件' : ''}`;
+        if (r.missing_glyphs && Object.keys(r.missing_glyphs).length) {
+          const chars = Object.values(r.missing_glyphs).flatMap((x) => x.chars || []);
+          TXGJ.toast(`本文件 ${chars.length} 个生僻字使用了备用字体，不影响阅读`, '');
+        }
+        window.location.href = r.download_url;
+      } catch (e) {
+        TXGJ.errToast(e);
+      } finally {
+        this.busy[key] = false;
+      }
+    },
+
+    // 必须是 getter：模板里 x-if="failedPages.length" 按属性取值，
+    // 若定义成方法，取到的是函数的 .length（形参个数 0），按钮永远不显示
+    get failedPages() { return this.pages.filter((p) => p.status === 'failed'); },
+
+    async retryFailed() {
+      const list = this.failedPages;
+      if (!list.length) return;
+      TXGJ.toast(`正在重试 ${list.length} 页…`);
+      let okN = 0, failN = 0;
+      for (const p of list) {
+        try {
+          const r = await TXGJ.api(`/api/tasks/${taskId}/pages/${p.page_no}/retry`, { method: 'POST' });
+          (r && r.status === 'failed') ? failN++ : okN++;
+        } catch (e) { failN++; TXGJ.errToast(e); }
+      }
+      TXGJ.toast(`重试完成：成功 ${okN} 页，失败 ${failN} 页`, okN ? 'ok' : '');
+      this.load();
+    },
+
+    async retryCurrent() {
+      if (!this.pageInfo || this.pageInfo.status !== 'failed') return;
+      TXGJ.toast(`正在重试第 ${this.pageInfo.page_no} 页…`);
+      try {
+        const r = await TXGJ.api(`/api/tasks/${taskId}/pages/${this.pageInfo.page_no}/retry`, { method: 'POST' });
+        if (r && r.status === 'failed') TXGJ.toast(`第 ${this.pageInfo.page_no} 页重试失败：${r.error || '识别通道暂不可用'}`);
+        else TXGJ.toast('重试成功', 'ok');
+      } catch (e) { TXGJ.errToast(e); }
+      this.load();
+    },
+
+    async cancel() {
+      if (!confirm('取消后已使用的免费额度不返还，确定取消？')) return;
+      try {
+        await TXGJ.api(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
+        TXGJ.toast('已取消');
+        this.load();
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    percent() {
+      const t = this.progress.total || 0;
+      if (!t) return 5;
+      return Math.min(100, Math.round((this.progress.done + this.progress.failed) / t * 100));
+    },
+
+    modeLabel() {
+      const m = { ancient: '繁体竖排古籍', formula: '现代公式 / 简体', modern: '现代横排' };
+      return this.task ? (m[this.task.mode] || this.task.mode) : '';
+    },
+
+    // 双页合拍拆出来的半页标一下，否则用户看到「第 1 页」以为原图就长这样
+    halfLabel() {
+      const p = (this.task && this.task.pages || []).find(x => x.page_no === this.pageNo);
+      if (!p || !p.split_half) return '';
+      return p.split_half === 1 ? '（右半 · 原图右页）' : '（左半 · 原图左页）';
+    },
+
+    statusLabel() {
+      const m = {
+        created: '已创建', preprocessing: '预处理中', queued: '排队中', processing: '识别中',
+        settling: '结算中', settled: '已完成', partial: '部分完成', failed: '识别失败',
+        cancelled: '已取消', locked: '待补款解锁', expired: '已过期',
+      };
+      return this.task ? (m[this.task.status] || this.task.status) : '';
+    },
+
+    statusClass() {
+      const s = this.task && this.task.status;
+      if (s === 'settled') return 'badge-jade';
+      if (s === 'locked' || s === 'failed') return 'badge-seal';
+      if (s === 'partial') return 'badge-amber';
+      return 'badge-gray';
+    },
+
+    pageTitle(p) {
+      const m = { done: '完成', empty: '空白', failed: '失败', pending: '等待', processing: '识别中', skipped: '跳过' };
+      return `第 ${p.page_no} 页 · ${m[p.status] || p.status} · ${p.chars || 0} 字`;
+    },
+
+    pageCls(p) {
+      // 页码按钮的状态着色，与下方图例一一对应
+      if (p.status === 'done') return 'pg-done';
+      if (p.status === 'failed') return 'pg-fail';
+      if (p.status === 'processing') return 'pg-run';
+      if (p.status === 'empty' || p.status === 'skipped') return 'pg-empty';
+      return 'pg-pend';
+    },
+
+    emptyText() {
+      const st = this.pageInfo && this.pageInfo.status;
+      if (st === 'empty') return '本页未识别到文字';
+      if (st === 'failed') return '本页识别失败';
+      if (st === 'pending' || st === 'processing') return '本页正在识别…';
+      if (st === 'skipped') return '本页已跳过（余额不足或任务被中止）';
+      return '暂无内容';
+    },
+
+    banner() {
+      if (!this.task) return null;
+      const t = this.task;
+      if (t.status === 'failed') {
+        return { cls: 'alert-err', icon: '!', text: '<strong>识别失败</strong>，已识别部分的费用会自动退回余额。',
+                 sub: t.error_code === 'E_ALL_PAGES_FAILED' ? '所有页都未能识别，可能是扫描质量过低或文件已损坏。' : '' };
+      }
+      if (t.status === 'locked') {
+        return { cls: 'alert-err', icon: '!',
+                 text: `余额不足，还差 <strong>¥${TXGJ.yuan(t.pending_mill)}</strong>，下载已锁定。`,
+                 sub: '文本仍可查看与复制；充值后自动解锁，不需要重新识别。' };
+      }
+      if (t.status === 'expired') {
+        return { cls: 'alert-warn', icon: '⌛', text: '<strong>文件已过期</strong>（保留 3 天），文件已被彻底删除。',
+                 sub: '同一文件重新上传，首次重跑免费，且不消耗免费额度。' };
+      }
+      if (t.status === 'partial') {
+        return { cls: 'alert-warn', icon: '!', text: '部分页识别失败或被中止，<strong>失败页不计费</strong>。',
+                 sub: '可以在页列表点红色页码单独重试，重试不额外扣费。' };
+      }
+      if (t.status === 'settled' && t.order_check_pass_rate !== null && t.order_check_pass_rate < 0.98) {
+        return { cls: 'alert-warn', icon: '!', text: '竖排行序自检未全部通过，建议对照原图核对。',
+                 sub: '如果某页明显串行，可在页列表定位该页并重试。' };
+      }
+      return null;
+    },
+  };
+}
+</script>
+{% endblock %}

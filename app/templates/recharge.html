@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}充值 · {{ site_name }}{% endblock %}
+
+{% block body %}
+<div class="wrap" x-data="rechargePage()" x-cloak>
+  <h1 class="page-title" style="font-size:26px">充值</h1>
+  <p class="page-sub">人工确认到账，付款后填写信息提交申请，管理员核对后入账。</p>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start" class="rcg-grid">
+    <div>
+      <!-- 档位 -->
+      <div class="card">
+        <div class="card-hd">1. 选择金额<span class="hint">固定档位，不支持自定义</span></div>
+        <div class="card-pad">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+            <template x-for="p in info.presets || []" :key="p.amount_mill">
+              <div class="mode-item" style="text-align:center"
+                   :class="{on: amountMill === p.amount_mill}"
+                   @click="amountMill = p.amount_mill">
+                <div class="mt" style="font-size:18px" x-text="p.amount_text"></div>
+                <div class="md" x-text="p.amount_mill === 10000 ? '够识别约 10 万字' :
+                                    p.amount_mill === 30000 ? '约 30 万字' :
+                                    p.amount_mill === 100000 ? '约 100 万字' : '约 300 万字'"></div>
+              </div>
+            </template>
+          </div>
+          <div class="small muted" style="margin-top:10px">
+            余额可用于识别扣费；<strong>不足 1000 字按 1000 字计费</strong>，约 ¥0.10。
+          </div>
+        </div>
+      </div>
+
+      <!-- 付款 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">2. 扫码付款</div>
+        <div class="card-pad">
+          <div style="display:flex;gap:10px;margin-bottom:14px">
+            <template x-for="m in info.pay_methods || []" :key="m.value">
+              <button class="btn" :class="payMethod === m.value ? 'btn-primary' : ''"
+                      @click="payMethod = m.value; qrErr = false" x-text="m.label"></button>
+            </template>
+          </div>
+          <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+            <div style="text-align:center">
+              <div style="width:180px;height:180px;border:1px solid var(--line);border-radius:8px;
+                          background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden">
+                <!-- 用 x-show 控制，避免 onerror 改写 DOM 后图片再也回不来 -->
+                <img :src="currentQr()" alt="收款码"
+                     x-show="!!currentQr() && !qrErr"
+                     @error="qrErr = true" @load="qrErr = false"
+                     style="max-width:100%;max-height:100%">
+                <span x-show="!currentQr() || qrErr"
+                      style="color:#8b8271;font-size:12.5px;padding:12px;text-align:center;line-height:1.7">
+                  收款码待上传<br>
+                  <span x-text="'请联系管理员 ' + (info.admin_name || '')"></span>
+                </span>
+              </div>
+              <div class="small muted" style="margin-top:6px">
+                应付 <strong style="color:var(--seal)" x-text="'¥' + (amountMill / 1000).toFixed(2)"></strong>
+              </div>
+            </div>
+            <div style="flex:1;min-width:220px">
+              <div class="small" style="line-height:2">
+                <template x-for="line in info.trust_lines || []">
+                  <div>· <span x-text="line"></span></div>
+                </template>
+                <div>· 管理员：<strong x-text="info.admin_name"></strong>　<span x-text="info.work_hours"></span></div>
+              </div>
+              <div class="alert alert-info" style="margin-top:12px" x-show="info.note">
+                <span>i</span><div x-text="info.note"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 提交 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">3. 提交到账申请</div>
+        <div class="card-pad">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <label class="fld">
+              <span class="lbl">付款人昵称（必填，用于核对）</span>
+              <input type="text" x-model="payerNote" placeholder="微信/支付宝显示的昵称">
+            </label>
+            <label class="fld">
+              <span class="lbl">转账时间（选填）</span>
+              <input type="text" x-model="paidAt" placeholder="如 2026-10-27 10:30">
+            </label>
+          </div>
+          <div class="small muted" style="margin-bottom:12px">
+            付款人昵称必须与转账记录一致，否则无法核对到账——这是人工充值最容易卡住的地方。
+          </div>
+
+          <template x-if="err">
+            <div class="alert alert-err" style="margin-bottom:12px"><span>!</span><div x-text="err"></div></div>
+          </template>
+          <template x-if="okMsg">
+            <div class="alert alert-ok" style="margin-bottom:12px"><span>✓</span><div x-text="okMsg"></div></div>
+          </template>
+
+          <button class="btn btn-seal btn-lg" :disabled="busy || !amountMill" @click="submit()">
+            <span class="spin" x-show="busy"></span>
+            <span x-text="busy ? '提交中…' : '我已付款，提交申请'"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 我的申请 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">我的充值记录</div>
+        <div class="card-pad" style="padding-top:6px">
+          <template x-if="orders.length === 0">
+            <div class="small muted" style="padding:12px 0">暂无记录</div>
+          </template>
+          <table class="tbl" x-show="orders.length">
+            <thead><tr><th>单号</th><th>金额</th><th>状态</th><th>提交时间</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="o in orders" :key="o.id">
+                <tr>
+                  <td class="mono small" x-text="o.order_no"></td>
+                  <td class="num" x-text="o.amount_text"></td>
+                  <td>
+                    <span class="badge" :class="o.status === 'confirmed' ? 'badge-jade' :
+                        (o.status === 'rejected' ? 'badge-seal' : 'badge-amber')"
+                          x-text="o.status_label"></span>
+                    <div class="small muted" x-show="o.reject_reason" x-text="o.reject_reason"></div>
+                  </td>
+                  <td class="small muted" x-text="TXGJ.fmtTime(o.created_at)"></td>
+                  <td>
+                    <button class="btn btn-sm btn-ghost" x-show="o.status === 'submitted'"
+                            @click="closeOrder(o.id)">撤销</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧规则 -->
+    <aside>
+      <div class="card">
+        <div class="card-hd">充值须知</div>
+        <div class="card-pad small" style="line-height:1.95">
+          <template x-for="r in info.rules || []">
+            <div style="margin-bottom:6px">· <span x-text="r"></span></div>
+          </template>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">为什么是人工确认</div>
+        <div class="card-pad small muted" style="line-height:1.9">
+          当前为个人运营，未接入商户在线支付。人工确认的好处是<strong>不会出现「扣了钱没到账」的无人处理情况</strong>：
+          每一笔都能对应到具体的付款人与单号。
+          <br><br>
+          如果你的申请超过 2 小时未处理，请把单号发给我，会优先核对。
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<style>[x-cloak]{display:none!important}
+@media (max-width: 900px){ .rcg-grid{grid-template-columns:1fr!important} }
+</style>
+
+<script>
+function rechargePage() {
+  return {
+    info: {}, orders: [],
+    amountMill: 10000,
+    payMethod: 'wechat',
+    payerNote: '', paidAt: '',
+    busy: false, err: '', okMsg: '', qrErr: false,
+
+    async init() {
+      try {
+        this.info = await TXGJ.api('/api/recharge/info');
+        window.ADMIN_NAME = this.info.admin_name;
+      } catch (e) { TXGJ.errToast(e); }
+      this.loadOrders();
+    },
+
+    async loadOrders() {
+      try {
+        const d = await TXGJ.api('/api/recharge/orders');
+        this.orders = d.items || [];
+      } catch (_) {}
+    },
+
+    currentQr() {
+      const m = (this.info.pay_methods || []).find((x) => x.value === this.payMethod);
+      return m ? m.qr : '';
+    },
+
+    async submit() {
+      this.err = ''; this.okMsg = '';
+      if (!this.payerNote.trim()) { this.err = '请填写付款人昵称'; return; }
+      this.busy = true;
+      try {
+        const r = await TXGJ.api('/api/recharge/orders', {
+          body: {
+            amount_mill: this.amountMill,
+            pay_method: this.payMethod,
+            payer_note: this.payerNote.trim(),
+            paid_at: this.paidAt.trim() || null,
+          },
+        });
+        this.okMsg = r.message || '申请已提交';
+        this.payerNote = ''; this.paidAt = '';
+        this.loadOrders();
+      } catch (e) {
+        this.err = e.message || '提交失败';
+      } finally { this.busy = false; }
+    },
+
+    async closeOrder(id) {
+      if (!confirm('撤销这笔申请？撤销后可重新提交。')) return;
+      try {
+        await TXGJ.api(`/api/recharge/orders/${id}/close`, { method: 'POST' });
+        this.loadOrders();
+      } catch (e) { TXGJ.errToast(e); }
+    },
+  };
+}
+</script>
+{% endblock %}
