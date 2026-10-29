@@ -18,6 +18,12 @@ itsdangerous>=2.1
 pymupdf>=1.24
 pillow>=10.0
 
+# 图像处理：双页合拍检测 / 中缝定位（app/services/preprocess.py 直接 import cv2, numpy）
+# 必须用 headless 版：opencv-python（非 headless）会拉 libGL / libX11 等 GUI 依赖，
+# 在 Docker 和纯命令行服务器上装不上或缺库。headless 只含图像算法，无 GUI 依赖。
+opencv-python-headless>=4.10
+numpy>=1.26
+
 # 导出：横排 Word（M1a 唯一必须交付格式）
 python-docx>=1.1
 

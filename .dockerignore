@@ -1,0 +1,43 @@
+# 构建镜像时排除的东西（不影响宿主上的文件）
+# 目的：① 镜像别把密钥打进去 ② 别把几百 MB 的数据和字体塞进镜像层
+
+# ===== 密钥：绝对不能进镜像 =====
+# compose 用 env_file 在运行时注入，构建期不需要
+.env
+.env.*
+
+# ===== 运行时数据（体积大，且必须持久化在宿主）=====
+data/
+tmp/
+.tmp/
+.pytest_tmp/
+*.db
+*.db-wal
+*.db-shm
+
+# ===== 字体（各 30MB，靠 volume 挂载，不打进镜像）=====
+fonts/*.ttf
+fonts/*.otf
+fonts/*.ttc
+
+# ===== 客户真实样张 =====
+test/
+
+# ===== Python 环境与缓存 =====
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# ===== 版本控制与本地工具产物 =====
+.git/
+.gitignore
+.workbuddy/
+docs/shots/
+docs/reports/
+
+# ===== 文档（镜像里用不到）=====
+*.md
+!requirements.txt

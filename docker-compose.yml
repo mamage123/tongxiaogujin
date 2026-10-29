@@ -1,0 +1,104 @@
+# 通晓古今 · NAS / 服务器部署编排
+#
+# 三个容器，各自职责不能合并：
+#   web     接请求、渲染页面、出下载（uvicorn）
+#   worker  轮询队列、调 OCR、生成导出文件（必须独立进程，否则重启 web 会打断识别）
+#   tunnel  Cloudflare 隧道，把本机 8000 端口映射到公网域名（可选，用 profiles 控制）
+#
+# 起法：
+#   docker compose up -d                              # 只起 web + worker（先验证本地能访问）
+#   docker compose --profile tunnel up -d             # 再加上公网隧道
+#   docker compose logs -f worker                     # 看识别日志
+#   docker compose down                               # 停
+#
+# 前置：在项目根目录建好 data/ 和 fonts/，并把 .env 填好（见 .env.example）。
+#   mkdir -p data/files fonts
+#   字体文件（SourceHanSerifSC/TC-Regular.ttf）必须手工放进 fonts/，git 里没有。
+
+services:
+  web:
+    build: .
+    image: txgj-app:latest
+    container_name: txgj-web
+    restart: unless-stopped
+
+    # 密钥从这里注入。.env 不进 git，也不进镜像（.dockerignore 已排除）。
+    env_file:
+      - .env
+    environment:
+      # 容器里的路径与宿主不同，必须覆盖成绝对路径。
+      # 用 4 个斜杠：sqlite:/// 是协议头，后接 /app/... 绝对路径。
+      DATABASE_URL: sqlite:////app/data/app.db
+      STORAGE_DIR: /app/data/files
+      FONT_DIR: /app/fonts
+
+    volumes:
+      # data 必须是宿主目录（不是匿名卷）：数据库、原图、导出件都在这里，
+      # 匿名卷一旦 down 掉就找不回来了，而且没法在 NAS 上直接备份。
+      - ./data:/app/data
+      # 字体只读挂载：应用从不写字体文件（京华老宋体的授权条款也禁止改）
+      - ./fonts:/app/fonts:ro
+
+    ports:
+      # 内网直连调试用。只用隧道的话可以整段删掉，减少暴露面。
+      - "${WEB_PORT:-8000}:8000"
+
+    healthcheck:
+      # 用健康检查而不是 curl：镜像里不一定有 curl，但一定有 python
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/meta/health',timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # web 本身很轻，1G 足够；真正吃内存的是 worker 里的 Chromium
+    mem_limit: 1g
+
+  worker:
+    build: .
+    image: txgj-app:latest
+    container_name: txgj-worker
+    restart: unless-stopped
+
+    # 同一个镜像，换启动命令
+    command: ["python", "-m", "app.worker"]
+
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/app.db
+      STORAGE_DIR: /app/data/files
+      FONT_DIR: /app/fonts
+
+    volumes:
+      # 必须与 web 挂**同一个**宿主目录：
+      # SQLite 走 WAL 模式靠文件锁做并发，两个容器指向不同目录就会各写各的库。
+      - ./data:/app/data
+      - ./fonts:/app/fonts:ro
+
+    depends_on:
+      web:
+        condition: service_healthy
+
+    # Chromium 打印一份 PDF 约需 300~500MB，加上 Python 自身与图像处理，
+    # 低于 1.5G 容易在导出大文件时被 OOM killer 干掉（现象是任务卡在 processing）。
+    mem_limit: 2g
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: txgj-tunnel
+    restart: unless-stopped
+
+    # 隧道走主动出站连接，所以家宽没有公网 IP、IP 天天变都能用。
+    profiles: ["tunnel"]
+
+    command: tunnel --no-autoupdate run
+
+    environment:
+      # 在 .env 里加一行 TUNNEL_TOKEN=xxx（Cloudflare 控制台创建隧道后给的）
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+
+    depends_on:
+      - web
