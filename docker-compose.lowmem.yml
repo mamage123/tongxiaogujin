@@ -1,0 +1,25 @@
+# 通晓古今 · 低端服务器编排（覆盖 docker-compose.yml 的内存限额）
+#
+# 适用：2 核 2G（或 2 核 4G 但还想留余量）的便宜机型。
+# 用法：与主文件**一起**加载，后者覆盖前者的 mem_limit：
+#   docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+#
+# 为什么要有这个文件：
+#   - 标准版给 worker 2g，是「导出大书永不 OOM」的稳妥值；
+#   - 但 2 核 2G 的整机只有 2G 内存，worker 一个容器就要 2g 会直接 OOM 启动失败；
+#   - 低配版把 worker 压到 1.4g、web 压到 512m，并要求宿主先开 2G swap 兜底。
+#
+# 前置（重要，见 scripts/setup-swap.sh）：
+#   2G 内存机型必须先开 swap，否则导出 100+ 页大书时 Chromium 仍可能被 OOM 杀掉，
+#   现象是任务卡在 processing、页一直不推进。开 2G swap 后峰值才压得住。
+#   sudo bash scripts/setup-swap.sh 2G
+
+services:
+  web:
+    # 低配：web 本身很轻，512m 足够
+    mem_limit: 512m
+
+  worker:
+    # 低配：1.4g。低于这个值，Chromium 打印一份 PDF（300~500MB）+ Python 自身
+    # + 图像处理会一起顶满，导出大书时稳定 OOM。再低的机型不建议跑这套站。
+    mem_limit: 1400m

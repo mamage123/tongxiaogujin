@@ -98,6 +98,27 @@ v0 <file.pdf>     验证供应商是否把 30 页 PDF 静默截断成 10 页
 开发期想单进程跑完队列，加 `RUN_WORKER_INPROC=1` 即可在 Web 进程内起 worker 线程
 （**仅限开发**：多副本部署会变成多个 worker 抢队列）。
 
+### 容器化部署（Docker）
+
+标准配置（`docker-compose.yml`）按 2 核 4G 以上设计：worker `mem_limit: 2g`、web `1g`。
+
+```bash
+docker compose up -d                      # web + worker
+docker compose --profile tunnel up -d     # 再加 Cloudflare 隧道
+```
+
+**低端服务器（2 核 2G / 便宜的轻量机型）**：用低配覆盖文件，把 worker 压到 1.4g、web 到 512m，
+并先给宿主开 swap 兜底（Chromium 打印大 PDF 峰值 300~500MB，2G 整机不 swap 会被 OOM 杀掉）：
+
+```bash
+sudo bash scripts/setup-swap.sh 2G        # 开 2G swap（开机自启，幂等）
+docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+```
+
+> 内存是这套站唯一不能省的指标：OCR 本身在云端跑，本机 CPU/带宽都过剩，但导出 PDF
+> 时的 Chromium 峰值内存会突增。低于 2G 的整机只建议跑「低配 + swap」组合，且要接受
+> 100+ 页大书导出变慢；再低（1 核 1G）不建议跑本套站。
+
 ### 环境变量
 
 完整清单见 `.env.example`（`APP_SECRET`、`DATABASE_URL`、`STORAGE_DIR`、`OCR_MOCK`、
