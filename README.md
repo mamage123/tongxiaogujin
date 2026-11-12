@@ -126,6 +126,39 @@ docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
 其中星河 Token 也支持在后台「开关与运维 → OCR 识别服务」在线配置（存 settings 表，
 审计日志只记尾 4 位脱敏），改完立即生效、无需重启。
 
+### 升级与备份（重要）
+
+**全站数据 = `data/app.db` 一个 SQLite 文件 + `data/files` 里的用户文件。** 代码随时能从
+GitHub 重新拉，但这个文件不会自己飞到别处 —— 删了、坏了、换机器忘了带走，数据就没了。
+
+升级代码**不会清库**：建表用 `CREATE TABLE ... IF NOT EXISTS`，已存在的表直接跳过，
+用户、余额、账本、任务记录原样保留。升级只要三步：
+
+```bash
+git pull                                # 拉新代码
+bash scripts/backup-db.sh               # 升级前先备份（强烈建议）
+docker compose up -d --build            # 重建镜像并重启
+```
+
+真正会清库的只有两种情况，务必避开：
+
+| 操作 | 结果 |
+|------|------|
+| 删除 `data/` 目录或 `app.db` 文件 | ❌ 数据全丢 |
+| 换服务器时忘了带走 `data/app.db` 和 `fonts/` | ❌ 数据不跟随代码 |
+
+备份脚本 `scripts/backup-db.sh`（用 SQLite `backup` API 拿一致性快照，比直接 `cp` 安全；
+默认保留最近 30 份，传数字可改保留数）：
+
+```bash
+bash scripts/backup-db.sh               # 备份到 data/backups/
+bash scripts/backup-db.sh 10            # 只保留最近 10 份
+```
+
+> 给改代码的人：若升级时给表**加新列**，只写进 `schema.sql` 不够（`IF NOT EXISTS` 不会
+> 给已存在的表补列，老库会报 `no such column`）。必须同时登记到 `app/db.py` 的
+> `_ADDED_COLUMNS`，启动时才会 `ALTER TABLE` 补上。
+
 ---
 
 ## 目录结构
