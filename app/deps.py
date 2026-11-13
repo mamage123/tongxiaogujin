@@ -91,7 +91,7 @@ def set_auth_cookies(response, user_id: str) -> None:
         max_age=settings.session_days * 86400,
         httponly=True,
         samesite="lax",
-        secure=settings.app_env == "prod",
+        secure=settings.cookie_secure,
         path="/",
     )
 

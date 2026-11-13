@@ -36,6 +36,13 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = _env(key, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -114,6 +121,10 @@ class Settings:
     circuit_break_ratio: float = field(default_factory=lambda: _env_float("CIRCUIT_BREAK_RATIO", 1.5))
     file_ttl_hours: int = field(default_factory=lambda: _env_int("FILE_TTL_HOURS", 72))
     session_days: int = field(default_factory=lambda: _env_int("SESSION_DAYS", 7))
+    # 会话 Cookie 是否打 Secure 标志。Secure 只在 HTTPS 下有效；
+    # 未上 HTTPS（HTTP 裸 IP 阶段）必须为 false，否则浏览器不保存 Cookie → 登录后立刻被踢回。
+    # 上了 HTTPS 后在 .env 设 COOKIE_SECURE=true 即可。
+    cookie_secure: bool = field(default_factory=lambda: _env_bool("COOKIE_SECURE", False))
     dup_window_seconds: int = field(default_factory=lambda: _env_int("DUP_WINDOW_SECONDS", 60))
 
     # 计费默认值（可被 settings 表覆盖）
