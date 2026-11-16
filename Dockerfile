@@ -17,7 +17,9 @@ WORKDIR /app
 
 # 先单独装依赖：requirements.txt 不变就能命中构建缓存，改代码不用重装依赖
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# 用清华 PyPI 镜像加速：国内服务器直连 pypi.org 极慢，容易超时。
+# 若部署在境外/海外服务器，可去掉 -i 参数改回官方源。
+RUN pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 再拷代码。.dockerignore 已排除 .env / data / tmp / 字体 / 样张，
 # 所以这一步不会把密钥和几百 MB 数据打进镜像层。
