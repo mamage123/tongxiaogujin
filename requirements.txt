@@ -33,10 +33,11 @@ zhconv>=1.4
 # 字体子集化（PDF 体积红线 M-13）
 fonttools>=4.50
 
-# PDF 导出（M1b）：可选。未安装时 /api/meta/health 会标记 pdf_engine.ok=false，
-# PDF 类导出返回 E_NO_PDF_ENGINE，Word/Markdown 不受影响。
-# 安装后还需：playwright install chromium
-# playwright>=1.44
+# PDF 导出：Playwright + Chromium 打印（竖排/字体子集化/文本层可复制都靠它）。
+# 基础镜像 mcr.microsoft.com/playwright/python 已自带 Chromium 二进制（/ms-playwright/），
+# 这里只需装 playwright Python 包，无需再 playwright install chromium。
+# 若用裸 Python 部署（非该镜像），装完包后需手动 playwright install chromium。
+playwright>=1.44
 
 # 测试
 pytest>=8.0
