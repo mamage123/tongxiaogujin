@@ -6,6 +6,9 @@
 #   2. 官方镜像同时提供 amd64 与 arm64 构建（多架构 manifest），
 #      群晖/威联通这类 ARM NAS 也能原生跑，不会被 qemu 模拟拖死；
 #   3. 浏览器固定落在 /ms-playwright，PLAYWRIGHT_BROWSERS_PATH 已设好，不要覆盖它。
+# ⚠️ 镜像版本必须与 requirements.txt 里 playwright== 的版本一致：
+#    镜像 v1.60.0-noble ↔ playwright 1.60.0 ↔ chromium 1223。
+#    只升其中一个会导致「Executable doesn't exist ... chromium_headless_shell」。
 FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
 
 ENV PYTHONUNBUFFERED=1 \
