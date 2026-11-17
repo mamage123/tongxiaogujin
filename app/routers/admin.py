@@ -29,6 +29,7 @@ from ..services.billing import (
 from ..services.cleanup import cleanup_expired, cleanup_records
 from ..services.compliance import check_keywords
 from ..services.payment.manual import AlreadyDone, ManualChannel
+from ..security import hash_password, password_problem
 from ..utils import mill_to_yuan, now_iso
 
 router = APIRouter(prefix="/admin/api", tags=["admin"])
@@ -227,6 +228,46 @@ def set_user_status(request: Request, user_id: str, payload: dict):
         conn.execute(text("UPDATE users SET status=:s WHERE id=:id"), {"s": status, "id": user_id})
     audit.log_admin(admin["id"], "user_status", "user", user_id, {"status": u["status"]}, {"status": status})
     return ok({"status": status})
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_password(request: Request, user_id: str, payload: dict | None = None):
+    """管理员直接重置用户密码（FR-ACC-04）。
+
+    默认重置为固定弱口令 ``1234567890``，也可在 body 里指定 ``new_password``。
+    与 CLI 的 resetpwd 行为一致：清空该账号的登录失败计数与锁定，避免用户
+    拿到新密码后仍被旧的失败计数卡在登录页。
+    """
+    admin = get_admin(request)
+    new_pwd = (payload or {}).get("new_password") or "1234567890"
+
+    u = q1("SELECT * FROM users WHERE id=:id", id=user_id)
+    if not u:
+        raise ApiError("E_NOT_FOUND", "用户不存在", 404)
+
+    # 若给的是自定义密码，仍需过强度校验；固定弱口令为管理员兜底通道，放行。
+    if new_pwd != "1234567890":
+        if msg := password_problem(new_pwd):
+            raise ApiError("E_WEAK_PASSWORD", msg)
+
+    # 防呆：重置自己（当前登录的管理员）会立刻被踢出后台，明确拦截。
+    if user_id == admin["id"]:
+        raise ApiError("E_SELF_RESET", "不能重置当前登录的管理员密码，请用 CLI 或换一个账号操作")
+
+    with tx() as conn:
+        conn.execute(
+            text("UPDATE users SET pwd_hash=:p WHERE id=:id"),
+            {"p": hash_password(new_pwd), "id": user_id},
+        )
+        # 登录失败计数按 scope 存（user:<名>），清掉才能让新密码立刻可用。
+        conn.execute(
+            text("DELETE FROM login_attempts WHERE scope=:s"),
+            {"s": f"user:{str(u['username']).lower()}"},
+        )
+
+    audit.log_admin(admin["id"], "reset_password", "user", user_id, None, {"new_password": "1234567890"})
+    audit.log_access("reset_password", admin["id"], client_ip(request), user_id)
+    return ok({"reset": True, "username": u["username"], "new_password": "1234567890"})
 
 
 @router.post("/users/{user_id}/grant-free")

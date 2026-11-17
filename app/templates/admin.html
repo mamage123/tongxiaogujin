@@ -196,6 +196,7 @@
                             <button class="btn btn-sm btn-ghost" style="padding:3px 8px" @click="grantFree(u)">补额度</button>
                             <button class="btn btn-sm btn-ghost" style="padding:3px 8px" @click="toggleStatus(u)"
                                     x-text="u.status === 'disabled' ? '启用' : '停用'"></button>
+                            <button class="btn btn-sm btn-ghost" style="padding:3px 8px" @click="resetPassword(u)">重置密码</button>
                           </div>
                         </td>
                       </tr>
@@ -752,6 +753,14 @@ function adminPage() {
         await TXGJ.api(`/admin/api/users/${u.id}/status`, { body: { status: next } });
         TXGJ.toast(next === 'disabled' ? '已停用' : '已启用', 'ok');
         this.loadUsers(this.userOffset);
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async resetPassword(u) {
+      if (!confirm(`确认把「${u.username}」的密码重置为 1234567890？\n该用户需要重新登录。`)) return;
+      try {
+        const r = await TXGJ.api(`/admin/api/users/${u.id}/reset-password`, { method: 'POST', body: {} });
+        TXGJ.toast(`已重置 ${r.username} 的密码为 1234567890`, 'ok');
       } catch (e) { TXGJ.errToast(e); }
     },
 
