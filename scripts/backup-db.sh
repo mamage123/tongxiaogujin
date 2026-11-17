@@ -28,8 +28,17 @@ DEST="$BACKUP_DIR/app.db-$STAMP"
 
 # 用 SQLite 自带的 backup API：即使有连接在写（WAL 模式）也能拿到一致快照，
 # 比直接 cp 更安全（cp 可能拷到写了一半的库）。
-PY=".venv/bin/python"
-if [ -x "$PY" ]; then
+# Python 解释器按环境选：容器内没有 .venv，直接用系统 python3；本机开发有 .venv。
+PY=""
+if [ -x ".venv/bin/python" ]; then
+  PY=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+elif command -v python >/dev/null 2>&1; then
+  PY="python"
+fi
+
+if [ -n "$PY" ]; then
   "$PY" -c "
 import sqlite3, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -41,6 +50,7 @@ d.close(); s.close()
 print('OK')
 " "$DB" "$DEST"
 else
+  echo "⚠ 找不到可用的 Python，退化为 cp（WAL 模式下可能拿到不一致快照）"
   cp "$DB" "$DEST"
 fi
 

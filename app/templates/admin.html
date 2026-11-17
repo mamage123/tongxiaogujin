@@ -477,11 +477,15 @@
               <div class="card" style="margin-top:14px">
                 <div class="card-hd">运维操作</div>
                 <div class="card-pad">
-                  <div style="display:flex;gap:10px;flex-wrap:wrap">
-                    <button class="btn btn-sm" @click="runCleanup()">立即执行 72h 清理</button>
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                    <button class="btn btn-sm" @click="runCleanup()">手动清理 72h 数据</button>
+                    <button class="btn btn-sm" @click="runBackup()">手动备份数据库</button>
                     <button class="btn btn-sm" @click="expireBalance()">执行余额过期清零</button>
                   </div>
                   <div class="small muted" style="margin-top:10px" x-text="opMsg"></div>
+                  <div class="small muted" style="margin-top:4px">
+                    清理与余额过期清零每日自动执行一次；手动备份把数据库一致性快照存到 data/backups/（保留最近 30 份）。
+                  </div>
                 </div>
               </div>
 
@@ -817,6 +821,15 @@ function adminPage() {
         const r = await TXGJ.api('/admin/api/cleanup/run', { method: 'POST' });
         this.opMsg = `清理 ${r.cleaned} 个任务，失败 ${r.failed}，释放 ${TXGJ.fmtBytes(r.freed_bytes)}`;
         TXGJ.toast('清理完成', 'ok');
+      } catch (e) { TXGJ.errToast(e); }
+    },
+
+    async runBackup() {
+      if (!confirm('手动备份数据库？备份会存到 data/backups/，保留最近 30 份。')) return;
+      try {
+        const r = await TXGJ.api('/admin/api/backup/run', { method: 'POST' });
+        this.opMsg = `已备份 ${r.filename}（${TXGJ.fmtBytes(r.size_bytes)}），当前共 ${r.kept} 份`;
+        TXGJ.toast('备份完成', 'ok');
       } catch (e) { TXGJ.errToast(e); }
     },
 

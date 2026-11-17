@@ -15,7 +15,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from sqlalchemy import text
 
 from ..config import settings
-from ..db import get_setting, q, q1, set_setting, tx
+from ..db import backup_database, get_setting, q, q1, set_setting, tx
 from ..deps import ApiError, client_ip, get_admin, ok
 from ..enums import RCG_STATUS_LABEL, TASK_STATUS_LABEL
 from ..services import audit
@@ -656,6 +656,23 @@ def run_cleanup(request: Request):
     admin = get_admin(request)
     res = cleanup_expired()
     audit.log_admin(admin["id"], "cleanup", "system", None, None, res)
+    return ok(res)
+
+
+@router.post("/backup/run")
+def run_backup(request: Request):
+    """手动备份数据库（FR-ADM-08）：一致性快照到 data/backups/，保留最近 30 份。
+
+    与每日自动备份（scripts/backup-daily.sh + crontab）互补：这里是管理员在
+    升级/改库前随时手动触发的一键备份。
+    """
+    admin = get_admin(request)
+    try:
+        res = backup_database()
+    except ValueError as e:
+        raise ApiError("E_BACKUP_FAILED", str(e)) from e
+    audit.log_admin(admin["id"], "db_backup", "system", None, None,
+                    {"filename": res["filename"], "size_bytes": res["size_bytes"]})
     return ok(res)
 
 

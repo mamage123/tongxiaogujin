@@ -277,3 +277,59 @@ def setting_float(key: str, default: float) -> float:
         return float(get_setting(key, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+# ---------------------------------------------------------------- 备份
+def backup_database(keep: int = 30) -> dict:
+    """用 SQLite backup API 做一致性快照（WAL 模式下 cp 会拷到写了一半的库）。
+
+    备份落在 data/backups/，按时间戳命名，自动滚动清理只保留最近 keep 份。
+    返回 {path, size_bytes, kept}。仅支持 SQLite；非 SQLite 抛 ValueError。
+    """
+    from datetime import datetime
+
+    if not settings.is_sqlite:
+        raise ValueError("当前数据库非 SQLite，暂不支持在线备份")
+
+    raw = settings.database_url
+    db_path = raw.replace("sqlite:///", "").replace("sqlite://", "")
+    if not db_path or db_path == ":memory:":
+        raise ValueError("内存库无法备份")
+
+    src = Path(db_path)
+    if not src.exists():
+        raise ValueError(f"数据库文件不存在：{src}")
+
+    backup_dir = src.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = backup_dir / f"app.db-{stamp}"
+
+    s = sqlite3.connect(str(src))
+    try:
+        d = sqlite3.connect(str(dest))
+        try:
+            with d:
+                s.backup(d)
+        finally:
+            d.close()
+    finally:
+        s.close()
+
+    # 滚动清理：保留最近 keep 份，更早的删除
+    files = sorted(backup_dir.glob("app.db-*"))
+    removed = 0
+    for f in files[:-keep] if keep > 0 else []:
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            pass
+
+    return {
+        "path": str(dest),
+        "filename": dest.name,
+        "size_bytes": dest.stat().st_size,
+        "kept": len(files) - removed,
+        "removed": removed,
+    }

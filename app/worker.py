@@ -11,7 +11,8 @@ from .config import settings
 from .db import init_db
 from .main import ensure_admin, templates  # noqa: F401 - 复用初始化逻辑
 from .services import worker as worker_svc
-from .services.cleanup import expire_stale_running
+from .services.billing import expire_balance
+from .services.cleanup import cleanup_expired, expire_stale_running, purge_blocks
 from .services.worker import acquire_worker_lock, claim_next, recover_stale_tasks, run_task
 
 logging.basicConfig(
@@ -55,6 +56,13 @@ def main() -> int:
     # 再加一个调度器只会多一个可能起不来的东西。
     maint_every = float(os.environ.get("WORKER_MAINT_SECONDS", "600"))
     next_maint = time.monotonic() + maint_every
+
+    # 每日轮（文件清理 + 块结构清除 + 余额过期清零）。
+    # 之前这三件事只挂在后台「运维操作」的手动按钮上——管理员忘点，文件就
+    # 一直留盘，既违反「72h 删除」的合规承诺（terms 里白纸黑字写着「定时任务
+    # 删除」），过期余额也永远不清。挂进 worker 每天跑一次，兜底自动执行。
+    daily_every = float(os.environ.get("WORKER_DAILY_SECONDS", str(24 * 3600)))
+    next_daily = time.monotonic() + daily_every
     log.info("worker 启动 poll=%ss ocr_primary=%s mock=%s", poll, settings.ocr_primary, settings.ocr_mock)
 
     idle_logged = False
@@ -75,6 +83,25 @@ def main() -> int:
                             log.warning("收容 %s 个长时间无进展的任务", killed)
                     except Exception:  # noqa: BLE001
                         log.exception("僵尸任务收容失败（不影响主循环）")
+                # 每日轮：文件清理、块清除、余额过期清零。
+                if time.monotonic() >= next_daily:
+                    next_daily = time.monotonic() + daily_every
+                    try:
+                        c = cleanup_expired()
+                        if c["cleaned"]:
+                            log.info("每日清理：删除 %s 个任务，释放 %.1f MB，失败 %s",
+                                     c["cleaned"], c["freed_bytes"] / 1048576, c["failed"])
+                        b = purge_blocks()
+                        if b:
+                            log.info("每日清理：清除 90 天前块结构 %s 行", b)
+                    except Exception:  # noqa: BLE001
+                        log.exception("每日文件清理失败（不影响主循环）")
+                    try:
+                        e = expire_balance()
+                        if e:
+                            log.info("余额过期清零：%s 个用户", e)
+                    except Exception:  # noqa: BLE001
+                        log.exception("余额过期清零失败（不影响主循环）")
                 time.sleep(poll)
                 continue
             idle_logged = False

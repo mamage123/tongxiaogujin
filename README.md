@@ -155,6 +155,19 @@ bash scripts/backup-db.sh               # 备份到 data/backups/
 bash scripts/backup-db.sh 10            # 只保留最近 10 份
 ```
 
+**每日自动备份（服务器/NAS 上强烈建议开启）**：只靠「升级前手动跑一次」不够——
+不升级、不手动跑，库就一直没有备份。用宿主机 crontab 每天定时调 `scripts/backup-daily.sh`
+（走容器内 python 调 SQLite backup API，备份落在共享的 `data/backups/`，宿主机可直接看到）：
+
+```bash
+crontab -e
+# 加入一行：每天 03:30 备份，日志写进 data/backups/cron.log
+30 3 * * * /bin/bash /opt/tongxiaogujin/scripts/backup-daily.sh >> /opt/tongxiaogujin/data/backups/cron.log 2>&1
+```
+
+> 路径 `/opt/tongxiaogujin` 换成你实际的部署目录。备份默认保留最近 30 份，
+> 可通过 `BACKUP_KEEP` 环境变量改。
+
 > 给改代码的人：若升级时给表**加新列**，只写进 `schema.sql` 不够（`IF NOT EXISTS` 不会
 > 给已存在的表补列，老库会报 `no such column`）。必须同时登记到 `app/db.py` 的
 > `_ADDED_COLUMNS`，启动时才会 `ALTER TABLE` 补上。
